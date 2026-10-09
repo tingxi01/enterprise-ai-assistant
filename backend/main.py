@@ -1,5 +1,6 @@
 
 from fastapi import FastAPI, UploadFile, File, HTTPException
+from backend.chunking import split_text
 import fitz
 
 app = FastAPI(
@@ -63,10 +64,17 @@ async def upload_document(file: UploadFile = File(...)):
             detail="Unable to process this PDF."
         )
 
+    chunks = split_text(
+        text=extracted_text,
+        chunk_size=500,
+        overlap=100
+    )
+
     return {
         "filename": file.filename,
         "pages": page_count,
         "characters_extracted": len(extracted_text),
-        "text_preview": extracted_text[:1000],
+        "total_chunks": len(chunks),
+        "chunk_previews": chunks[:3],
         "status": "processed"
     }
