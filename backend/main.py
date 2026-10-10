@@ -1,6 +1,7 @@
 
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from pydantic import BaseModel, Field
+from backend.llm import generate_answer
 import fitz
 
 from backend.chunking import split_text
@@ -201,4 +202,53 @@ def search_document(request: SearchRequest):
         "question": request.question,
         "results": results,
         "total_results": len(results)
+    }
+
+
+# --------------------------------------------------
+# AI-Powered Document Question Answering
+# --------------------------------------------------
+
+@app.post("/documents/ask")
+def ask_document(request: SearchRequest):
+
+    if not document_chunks or not document_embeddings:
+        raise HTTPException(
+            status_code=404,
+            detail="Upload a document before asking questions."
+        )
+
+    if not request.question.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Question cannot be empty."
+        )
+
+    # Step 1: Retrieve relevant document sections
+    results = semantic_search(
+        query=request.question,
+        chunks=document_chunks,
+        chunk_embeddings=document_embeddings,
+        top_k=request.top_k
+    )
+
+    # Step 2: Generate an answer with Qwen3
+    try:
+        answer = generate_answer(
+            question=request.question,
+            retrieved_chunks=results
+        )
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Unable to connect to the local AI model."
+        ) from exc
+
+    # Step 3: Return the answer and supporting chunks
+    return {
+        "question": request.question,
+        "answer": answer,
+        "sources": results,
+        "model": "qwen3:4b"
     }
