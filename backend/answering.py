@@ -55,6 +55,27 @@ def keywords(text: str) -> set[str]:
 
 
 def is_procedure_question(question: str) -> bool:
+    """
+    Identify requests for instructions or procedures.
+
+    Do not treat factual questions about frequencies,
+    durations, quantities, or intervals as procedures
+    just because they contain words such as "change".
+    """
+
+    normalized = question.lower().strip()
+
+    # Factual questions should use normal document QA,
+    # even when they mention an action such as changing
+    # a password or uploading a file.
+    if re.match(
+        r"^(?:how\s+(?:often|frequently|many|much|long)|"
+        r"when|what\s+(?:is|are)\s+the\s+"
+        r"(?:frequency|duration|interval))\b",
+        normalized,
+    ):
+        return False
+
     words = keywords(question)
 
     return bool(words & PROCEDURE_WORDS)
@@ -162,8 +183,8 @@ def answer_from_numbered_procedure(
         overlap = question_terms & heading_terms
 
         # Require a topic match to the procedure heading.
-        # This prevents a photo question from returning
-        # unrelated "EDITING LINKS" instructions.
+        # This prevents a question from returning
+        # unrelated numbered instructions.
         if not overlap:
             continue
 

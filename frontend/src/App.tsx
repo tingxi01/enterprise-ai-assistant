@@ -61,12 +61,13 @@ function makeChat(documentId: string | null = null): SavedChat {
 }
 
 function validMessages(value: unknown): value is Message[] {
-  return Array.isArray(value) && value.every((item) =>
-    item !== null &&
-    typeof item === 'object' &&
-    typeof item.id === 'number' &&
-    (item.role === 'user' || item.role === 'assistant') &&
-    typeof item.content === 'string'
+  return Array.isArray(value) && value.every(
+    (item) =>
+      item !== null &&
+      typeof item === 'object' &&
+      typeof item.id === 'number' &&
+      (item.role === 'user' || item.role === 'assistant') &&
+      typeof item.content === 'string'
   )
 }
 
@@ -87,8 +88,10 @@ function loadChats(): ChatStore {
               typeof chat === 'object' &&
               typeof chat.id === 'string' &&
               typeof chat.title === 'string' &&
-              (chat.selectedDocumentId === null ||
-                typeof chat.selectedDocumentId === 'string') &&
+              (
+                chat.selectedDocumentId === null ||
+                typeof chat.selectedDocumentId === 'string'
+              ) &&
               validMessages(chat.messages) &&
               typeof chat.updatedAt === 'number'
           )
@@ -107,7 +110,7 @@ function loadChats(): ChatStore {
       }
     }
 
-    // Import previous single-chat history.
+    // Import older single-chat history if available.
     const previous = localStorage.getItem(CHAT_STORAGE_KEY)
 
     if (previous) {
@@ -118,8 +121,10 @@ function loadChats(): ChatStore {
 
       if (
         validMessages(old.messages) &&
-        (old.selectedDocumentId === null ||
-          typeof old.selectedDocumentId === 'string')
+        (
+          old.selectedDocumentId === null ||
+          typeof old.selectedDocumentId === 'string'
+        )
       ) {
         const chat = makeChat(old.selectedDocumentId)
 
@@ -135,7 +140,7 @@ function loadChats(): ChatStore {
       }
     }
   } catch {
-    // Use a new chat if storage cannot be read.
+    // Fall back to an empty chat.
   }
 
   const chat = makeChat()
@@ -195,7 +200,13 @@ function App() {
 
   const busy = uploading || thinking || deletingId !== null
 
-  // Update the saved version of the current chat.
+  // A deleted document must not silently become "All documents".
+  const selectedDocumentMissing =
+    !loadingDocuments &&
+    selectedDocumentId !== null &&
+    !documents.some((doc) => doc.id === selectedDocumentId)
+
+  // Keep the active conversation synchronized with the chat list.
   useEffect(() => {
     setChats((previous) =>
       previous.map((chat) => {
@@ -225,7 +236,7 @@ function App() {
     )
   }, [activeChatId, selectedDocumentId, messages])
 
-  // Save all conversations to browser storage.
+  // Save all conversations in the browser.
   useEffect(() => {
     try {
       localStorage.setItem(
@@ -236,11 +247,10 @@ function App() {
         })
       )
     } catch {
-      // Chat continues even if storage is unavailable.
+      // In-memory chat still works if storage is unavailable.
     }
   }, [activeChatId, chats])
 
-  // Open an existing conversation.
   function openChat(chat: SavedChat) {
     if (busy || chat.id === activeChatId) return
 
@@ -251,7 +261,6 @@ function App() {
     setError('')
   }
 
-  // Create a new, separate conversation.
   function createChat(documentId: string | null = null) {
     if (busy) return
 
@@ -265,7 +274,6 @@ function App() {
     setError('')
   }
 
-  // Rename a conversation.
   function renameChat(chat: SavedChat) {
     if (busy) return
 
@@ -288,7 +296,6 @@ function App() {
     )
   }
 
-  // Delete one conversation without deleting documents.
   function removeChat(chat: SavedChat) {
     if (busy) return
 
@@ -302,13 +309,11 @@ function App() {
       (item) => item.id !== chat.id
     )
 
-    // Deleting an inactive chat does not affect the open chat.
     if (chat.id !== activeChatId) {
       setChats(remaining)
       return
     }
 
-    // Switch to another chat or create an empty one.
     const fallback = remaining[0] ?? makeChat()
 
     setChats(remaining.length ? remaining : [fallback])
@@ -348,7 +353,7 @@ function App() {
     return data.documents
   }
 
-  // Load documents from PostgreSQL.
+  // Load existing documents from PostgreSQL.
   useEffect(() => {
     let cancelled = false
 
@@ -381,10 +386,9 @@ function App() {
     }
   }, [])
 
-  // Selecting a document starts a new chat for that document.
+  // Selecting a document starts a new conversation.
   function selectDocument(id: string | null) {
     if (busy) return
-
     createChat(id)
   }
 
@@ -425,7 +429,7 @@ function App() {
       ])
 
       // Start a new chat for the uploaded document.
-      // Existing chats are preserved.
+      // Previously saved chats are not deleted.
       const uploadedChat = makeChat(uploaded.id)
 
       setChats((previous) => [
@@ -438,7 +442,6 @@ function App() {
       setMessages([])
       setQuestion('')
 
-      // Refresh the document library.
       try {
         const updated = await fetchDocuments()
         setDocuments(updated)
@@ -458,7 +461,7 @@ function App() {
         const updated = await fetchDocuments()
         setDocuments(updated)
       } catch {
-        // Preserve original error.
+        // Preserve the original upload error.
       }
     } finally {
       setUploading(false)
@@ -469,6 +472,7 @@ function App() {
     }
   }
 
+  // Delete a document without deleting its previous conversations.
   async function deleteDocument(doc: DocumentItem) {
     if (busy) return
 
@@ -489,53 +493,29 @@ function App() {
         }
       )
 
-      if (!response.ok) {
-        if (response.status === 404) {
-          const updated = await fetchDocuments()
-          setDocuments(updated)
-
-          if (
-            !updated.some(
-              (item) => item.id === selectedDocumentId
-            )
-          ) {
-            setSelectedDocumentId(null)
-            setMessages([])
-            setQuestion('')
-          }
-
-          return
-        }
-
+      // A 404 means the document is already gone.
+      // In that case, synchronize the frontend anyway.
+      if (!response.ok && response.status !== 404) {
         throw new Error(await readError(response))
       }
 
+      // Remove the document from the sidebar.
       setDocuments((previous) =>
         previous.filter((item) => item.id !== doc.id)
       )
 
-      // Clear active messages if their document was deleted.
-      if (selectedDocumentId === doc.id) {
-        setSelectedDocumentId(null)
-        setMessages([])
-        setQuestion('')
-      }
+      // IMPORTANT:
+      // Keep selectedDocumentId and messages unchanged.
+      // This preserves the old conversation and allows
+      // selectedDocumentMissing to detect the deleted PDF.
+      setQuestion('')
 
       try {
         const updated = await fetchDocuments()
         setDocuments(updated)
-
-        if (
-          selectedDocumentId !== null &&
-          !updated.some(
-            (item) => item.id === selectedDocumentId
-          )
-        ) {
-          setSelectedDocumentId(null)
-        }
       } catch {
         setError(
-          'Document deleted successfully, but refreshing the library failed.'
+          'Document deleted, but refreshing the library failed.'
         )
       }
     } catch (err) {
@@ -549,7 +529,7 @@ function App() {
         const updated = await fetchDocuments()
         setDocuments(updated)
       } catch {
-        // Keep the original error.
+        // Preserve the original error.
       }
     } finally {
       setDeletingId(null)
@@ -563,9 +543,19 @@ function App() {
 
     const text = question.trim()
 
-    if (!text || documents.length === 0 || busy) return
+    // Never allow a deleted document's chat to search
+    // unrelated documents by mistake.
+    if (
+      !text ||
+      documents.length === 0 ||
+      loadingDocuments ||
+      selectedDocumentMissing ||
+      busy
+    ) {
+      return
+    }
 
-    // Send only the current conversation's previous messages.
+    // Include only this conversation's previous messages.
     const history = messages
       .filter((message) => message.content.trim())
       .slice(-6)
@@ -605,8 +595,7 @@ function App() {
         throw new Error(await readError(response))
       }
 
-      const data: AnswerResponse =
-        await response.json()
+      const data: AnswerResponse = await response.json()
 
       setMessages((previous) => [
         ...previous,
@@ -653,7 +642,7 @@ function App() {
           ＋ New chat
         </button>
 
-        {/* MULTIPLE SAVED CONVERSATIONS */}
+        {/* SAVED CONVERSATIONS */}
         <div className="sidebar-section">
           <div className="section-heading">
             RECENT CHATS
@@ -667,8 +656,7 @@ function App() {
           >
             {[...chats]
               .sort(
-                (a, b) =>
-                  b.updatedAt - a.updatedAt
+                (a, b) => b.updatedAt - a.updatedAt
               )
               .map((chat) => (
                 <div
@@ -769,7 +757,6 @@ function App() {
             disabled={busy}
           >
             <span>▦</span>
-
             <span>All documents</span>
 
             <span className="document-count">
@@ -800,9 +787,7 @@ function App() {
                     className="library-document-select"
                     disabled={busy}
                     title={doc.filename}
-                    onClick={() =>
-                      selectDocument(doc.id)
-                    }
+                    onClick={() => selectDocument(doc.id)}
                   >
                     <span className="document-symbol">
                       ▧
@@ -825,13 +810,9 @@ function App() {
                     title={`Delete ${doc.filename}`}
                     aria-label={`Delete ${doc.filename}`}
                     disabled={busy}
-                    onClick={() =>
-                      void deleteDocument(doc)
-                    }
+                    onClick={() => void deleteDocument(doc)}
                   >
-                    {deletingId === doc.id
-                      ? '…'
-                      : '×'}
+                    {deletingId === doc.id ? '…' : '×'}
                   </button>
                 </div>
               ))}
@@ -865,9 +846,11 @@ function App() {
             </div>
 
             <div className="topbar-subtitle">
-              {selectedDocument
-                ? `Searching: ${selectedDocument.filename}`
-                : `Searching all documents (${documents.length})`}
+              {selectedDocumentMissing
+                ? 'Document unavailable'
+                : selectedDocument
+                  ? `Searching: ${selectedDocument.filename}`
+                  : `Searching all documents (${documents.length})`}
             </div>
           </div>
 
@@ -880,9 +863,7 @@ function App() {
         <div className="chat-content">
           {messages.length === 0 ? (
             <div className="welcome">
-              <div className="welcome-icon">
-                ✦
-              </div>
+              <div className="welcome-icon">✦</div>
 
               <h1>
                 Knowledge, at your fingertips.
@@ -1061,6 +1042,16 @@ function App() {
         </div>
 
         <div className="composer-area">
+          {selectedDocumentMissing && (
+            <div className="error-banner">
+              The document used by this conversation is
+              no longer available. Your previous messages
+              are preserved, but you cannot ask new
+              questions in this chat. Start a new chat
+              or select an available document.
+            </div>
+          )}
+
           {error && (
             <div className="error-banner">
               {error}
@@ -1077,12 +1068,17 @@ function App() {
                 setQuestion(event.target.value)
               }
               disabled={
-                documents.length === 0 || busy
+                documents.length === 0 ||
+                loadingDocuments ||
+                selectedDocumentMissing ||
+                busy
               }
               placeholder={
-                documents.length
-                  ? 'Ask a question about your documents...'
-                  : 'Upload a PDF to get started...'
+                selectedDocumentMissing
+                  ? 'Document unavailable — start a new chat'
+                  : documents.length
+                    ? 'Ask a question about your documents...'
+                    : 'Upload a PDF to get started...'
               }
             />
 
@@ -1092,6 +1088,8 @@ function App() {
               disabled={
                 !question.trim() ||
                 documents.length === 0 ||
+                loadingDocuments ||
+                selectedDocumentMissing ||
                 busy
               }
               aria-label="Send question"
@@ -1113,8 +1111,7 @@ function App() {
         accept=".pdf,application/pdf"
         hidden
         onChange={(event) => {
-          const file =
-            event.target.files?.[0]
+          const file = event.target.files?.[0]
 
           if (file) {
             void uploadDocument(file)
