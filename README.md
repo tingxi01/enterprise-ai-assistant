@@ -9,6 +9,20 @@ The project was independently developed to explore applied AI engineering, RAG s
 
 > **Project status:** Functional local prototype with a Docker Compose setup. Designed for development and portfolio demonstration, not production deployment.
 
+
+## Application Screenshots
+
+### Light Mode
+
+![Enterprise AI Assistant - Light Mode](docs/screenshots/light-mode.png)
+
+### Dark Mode
+
+![Enterprise AI Assistant - Dark Mode](docs/screenshots/dark-mode.png)
+
+---
+
+
 ## Features
 
 ### Document Management
