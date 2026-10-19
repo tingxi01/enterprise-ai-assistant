@@ -31,6 +31,7 @@ type AnswerResponse = {
   answer: string
   sources: Source[]
   model: string
+  resolved_question?: string
 }
 
 let nextMessageId = 1
@@ -117,6 +118,7 @@ function App() {
     }
   }, [])
 
+  // Switching documents clears conversation history.
   function selectDocument(id: string | null) {
     if (busy) return
 
@@ -198,7 +200,7 @@ function App() {
     }
   }
 
-  // Delete from PostgreSQL and immediately update the React sidebar.
+  // Delete from PostgreSQL and update the React sidebar.
   async function deleteDocument(doc: DocumentItem) {
     if (busy) return
 
@@ -220,12 +222,13 @@ function App() {
       )
 
       if (!response.ok) {
-        // If the record is already gone, synchronize the UI anyway.
+        // If the record is already gone, synchronize the UI.
         if (response.status === 404) {
           const updated = await fetchDocuments()
           setDocuments(updated)
 
           setMessages([])
+          setQuestion('')
 
           if (
             !updated.some((item) => item.id === selectedDocumentId)
@@ -294,6 +297,18 @@ function App() {
 
     if (!text || documents.length === 0 || busy) return
 
+    // CONVERSATION MEMORY:
+    // Capture the last six completed messages BEFORE adding
+    // the current question. This prevents duplicate messages
+    // and allows the backend to resolve follow-up questions.
+    const history = messages
+      .filter((message) => message.content.trim())
+      .slice(-6)
+      .map(({ role, content }) => ({
+        role,
+        content: content.slice(0, 2000),
+      }))
+
     setMessages((previous) => [
       ...previous,
       {
@@ -317,6 +332,7 @@ function App() {
           question: text,
           top_k: 5,
           document_id: selectedDocumentId,
+          history: history,
         }),
       })
 
@@ -373,7 +389,9 @@ function App() {
         </button>
 
         <div className="sidebar-section">
-          <div className="section-heading">WORKSPACE</div>
+          <div className="section-heading">
+            WORKSPACE
+          </div>
 
           <div className="sidebar-link active">
             ▤ &nbsp; AI Assistant
