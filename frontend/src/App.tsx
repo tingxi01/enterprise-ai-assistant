@@ -34,9 +34,6 @@ type AnswerResponse = {
   resolved_question?: string
 }
 
-const CHAT_STORAGE_KEY = 'enterprise-ai-current-chat'
-const CHATS_STORAGE_KEY = 'enterprise-ai-saved-chats-v1'
-
 type SavedChat = {
   id: string
   title: string
@@ -50,6 +47,60 @@ type ChatStore = {
   chats: SavedChat[]
 }
 
+type Theme = 'light' | 'dark'
+
+const CHAT_STORAGE_KEY = 'enterprise-ai-current-chat'
+const CHATS_STORAGE_KEY = 'enterprise-ai-saved-chats-v1'
+const THEME_STORAGE_KEY = 'enterprise-ai-theme-v1'
+
+function initialTheme(): Theme {
+  try {
+    const saved = localStorage.getItem(THEME_STORAGE_KEY)
+
+    if (saved === 'light' || saved === 'dark') {
+      return saved
+    }
+  } catch {
+    // The theme still works without localStorage.
+  }
+
+  return 'light'
+}
+
+function BrandMark({ size = 32 }: { size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 48 48"
+      fill="none"
+      aria-hidden="true"
+    >
+      <rect
+        x="11"
+        y="6.5"
+        width="26"
+        height="35"
+        rx="5.5"
+        stroke="currentColor"
+        strokeWidth="2.5"
+      />
+      <path
+        d="M17 17H30M17 23H25"
+        stroke="currentColor"
+        strokeWidth="2.5"
+        strokeLinecap="round"
+      />
+      <path
+        d="M32 25L34.6 31.4L41 34L34.6 36.6L32 43L29.4 36.6L23 34L29.4 31.4L32 25Z"
+        fill="currentColor"
+        stroke="var(--brand-mark-bg)"
+        strokeWidth="1.8"
+      />
+    </svg>
+  )
+}
+
 function makeChat(documentId: string | null = null): SavedChat {
   return {
     id: crypto.randomUUID(),
@@ -61,13 +112,16 @@ function makeChat(documentId: string | null = null): SavedChat {
 }
 
 function validMessages(value: unknown): value is Message[] {
-  return Array.isArray(value) && value.every(
-    (item) =>
-      item !== null &&
-      typeof item === 'object' &&
-      typeof item.id === 'number' &&
-      (item.role === 'user' || item.role === 'assistant') &&
-      typeof item.content === 'string'
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (item) =>
+        item !== null &&
+        typeof item === 'object' &&
+        typeof item.id === 'number' &&
+        (item.role === 'user' || item.role === 'assistant') &&
+        typeof item.content === 'string'
+    )
   )
 }
 
@@ -129,9 +183,10 @@ function loadChats(): ChatStore {
         const chat = makeChat(old.selectedDocumentId)
 
         chat.messages = old.messages
-        chat.title = old.messages.find(
-          (msg) => msg.role === 'user'
-        )?.content.slice(0, 48) || 'New chat'
+        chat.title =
+          old.messages.find(
+            (msg) => msg.role === 'user'
+          )?.content.slice(0, 48) || 'New chat'
 
         return {
           activeChatId: chat.id,
@@ -154,6 +209,18 @@ function loadChats(): ChatStore {
 let nextMessageId = 1
 
 function App() {
+  const [theme, setTheme] = useState<Theme>(initialTheme)
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme
+
+    try {
+      localStorage.setItem(THEME_STORAGE_KEY, theme)
+    } catch {
+      // Theme remains active for this session.
+    }
+  }, [theme])
+
   const [documents, setDocuments] = useState<DocumentItem[]>([])
 
   const [initialStore] = useState(loadChats)
@@ -188,8 +255,13 @@ function App() {
 
   const [uploading, setUploading] = useState(false)
   const [thinking, setThinking] = useState(false)
-  const [deletingId, setDeletingId] = useState<string | null>(null)
-  const [loadingDocuments, setLoadingDocuments] = useState(true)
+
+  const [deletingId, setDeletingId] =
+    useState<string | null>(null)
+
+  const [loadingDocuments, setLoadingDocuments] =
+    useState(true)
+
   const [error, setError] = useState('')
 
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -200,13 +272,15 @@ function App() {
 
   const busy = uploading || thinking || deletingId !== null
 
-  // A deleted document must not silently become "All documents".
+  // A deleted document must not silently become
+  // "All documents".
   const selectedDocumentMissing =
     !loadingDocuments &&
     selectedDocumentId !== null &&
     !documents.some((doc) => doc.id === selectedDocumentId)
 
-  // Keep the active conversation synchronized with the chat list.
+  // Keep the active conversation synchronized
+  // with the saved chat list.
   useEffect(() => {
     setChats((previous) =>
       previous.map((chat) => {
@@ -247,7 +321,7 @@ function App() {
         })
       )
     } catch {
-      // In-memory chat still works if storage is unavailable.
+      // In-memory chat still works.
     }
   }, [activeChatId, chats])
 
@@ -389,6 +463,7 @@ function App() {
   // Selecting a document starts a new conversation.
   function selectDocument(id: string | null) {
     if (busy) return
+
     createChat(id)
   }
 
@@ -472,7 +547,8 @@ function App() {
     }
   }
 
-  // Delete a document without deleting its previous conversations.
+  // Delete a document without deleting its
+  // previous conversations.
   async function deleteDocument(doc: DocumentItem) {
     if (busy) return
 
@@ -494,20 +570,17 @@ function App() {
       )
 
       // A 404 means the document is already gone.
-      // In that case, synchronize the frontend anyway.
       if (!response.ok && response.status !== 404) {
         throw new Error(await readError(response))
       }
 
-      // Remove the document from the sidebar.
       setDocuments((previous) =>
         previous.filter((item) => item.id !== doc.id)
       )
 
-      // IMPORTANT:
       // Keep selectedDocumentId and messages unchanged.
-      // This preserves the old conversation and allows
-      // selectedDocumentMissing to detect the deleted PDF.
+      // Old conversation history remains accessible,
+      // but new questions are disabled for this PDF.
       setQuestion('')
 
       try {
@@ -543,8 +616,8 @@ function App() {
 
     const text = question.trim()
 
-    // Never allow a deleted document's chat to search
-    // unrelated documents by mistake.
+    // Never let a deleted document's chat
+    // search unrelated documents by mistake.
     if (
       !text ||
       documents.length === 0 ||
@@ -555,7 +628,7 @@ function App() {
       return
     }
 
-    // Include only this conversation's previous messages.
+    // Send only this conversation's prior messages.
     const history = messages
       .filter((message) => message.content.trim())
       .slice(-6)
@@ -621,7 +694,9 @@ function App() {
     <div className="app-shell">
       <aside className="sidebar">
         <div className="brand">
-          <div className="brand-icon">✦</div>
+          <div className="brand-icon">
+            <BrandMark size={29} />
+          </div>
 
           <div>
             <div className="brand-name">
@@ -642,88 +717,59 @@ function App() {
           ＋ New chat
         </button>
 
-        {/* SAVED CONVERSATIONS */}
+        {/* Saved conversations */}
         <div className="sidebar-section">
           <div className="section-heading">
             RECENT CHATS
           </div>
 
-          <div
-            style={{
-              maxHeight: 220,
-              overflowY: 'auto',
-            }}
-          >
+          <div className="recent-chat-list">
             {[...chats]
-              .sort(
-                (a, b) => b.updatedAt - a.updatedAt
-              )
+              .sort((a, b) => b.updatedAt - a.updatedAt)
               .map((chat) => (
                 <div
                   key={chat.id}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 4,
-                    borderRadius: 8,
-                    background:
-                      chat.id === activeChatId
-                        ? 'rgba(128,128,128,0.18)'
-                        : 'transparent',
-                  }}
+                  className={`recent-chat ${
+                    chat.id === activeChatId ? 'active' : ''
+                  }`}
                 >
                   <button
                     type="button"
+                    className="recent-chat-title"
                     disabled={busy}
                     onClick={() => openChat(chat)}
                     title={chat.title}
-                    style={{
-                      flex: 1,
-                      minWidth: 0,
-                      textAlign: 'left',
-                      padding: '9px 8px',
-                      background: 'transparent',
-                      border: 0,
-                      color: 'inherit',
-                      cursor: 'pointer',
-                      whiteSpace: 'nowrap',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                    }}
                   >
-                    {chat.title}
+                    <span
+                      className="recent-chat-symbol"
+                      aria-hidden="true"
+                    >
+                      ◷
+                    </span>
+
+                    <span className="recent-chat-label">
+                      {chat.title}
+                    </span>
                   </button>
 
                   <button
                     type="button"
+                    className="chat-action"
                     disabled={busy}
                     title="Rename chat"
                     aria-label={`Rename ${chat.title}`}
                     onClick={() => renameChat(chat)}
-                    style={{
-                      border: 0,
-                      background: 'transparent',
-                      color: 'inherit',
-                      cursor: 'pointer',
-                      padding: 5,
-                    }}
                   >
                     ✎
                   </button>
 
                   <button
                     type="button"
+                    className="chat-action"
                     disabled={busy}
                     title="Delete chat"
                     aria-label={`Delete ${chat.title}`}
                     onClick={() => removeChat(chat)}
-                    style={{
-                      border: 0,
-                      background: 'transparent',
-                      color: 'inherit',
-                      cursor: 'pointer',
-                      padding: 5,
-                    }}
                   >
                     ×
                   </button>
@@ -732,6 +778,7 @@ function App() {
           </div>
         </div>
 
+        {/* Workspace */}
         <div className="sidebar-section">
           <div className="section-heading">
             WORKSPACE
@@ -742,6 +789,7 @@ function App() {
           </div>
         </div>
 
+        {/* Document library */}
         <div className="sidebar-section">
           <div className="section-heading">
             KNOWLEDGE BASE
@@ -749,9 +797,7 @@ function App() {
 
           <button
             className={`document-filter ${
-              selectedDocumentId === null
-                ? 'selected'
-                : ''
+              selectedDocumentId === null ? 'selected' : ''
             }`}
             onClick={() => selectDocument(null)}
             disabled={busy}
@@ -838,6 +884,7 @@ function App() {
         </div>
       </aside>
 
+      {/* Main content */}
       <main className="main-area">
         <header className="topbar">
           <div>
@@ -854,25 +901,54 @@ function App() {
             </div>
           </div>
 
-          <div className="model-pill">
-            <span className="model-dot" />
-            Qwen2.5 3B
+          <div className="topbar-actions">
+            <button
+              type="button"
+              className="theme-toggle"
+              onClick={() =>
+                setTheme((current) =>
+                  current === 'light' ? 'dark' : 'light'
+                )
+              }
+              aria-label={`Switch to ${
+                theme === 'light' ? 'dark' : 'light'
+              } mode`}
+              title={`Switch to ${
+                theme === 'light' ? 'dark' : 'light'
+              } mode`}
+            >
+              <span aria-hidden="true">
+                {theme === 'light' ? '☾' : '☀'}
+              </span>
+
+              <span>
+                {theme === 'light'
+                  ? 'Dark mode'
+                  : 'Light mode'}
+              </span>
+            </button>
+
+            <div className="model-pill">
+              <span className="model-dot" />
+              Qwen2.5 3B
+            </div>
           </div>
         </header>
 
         <div className="chat-content">
           {messages.length === 0 ? (
             <div className="welcome">
-              <div className="welcome-icon">✦</div>
+              <div className="welcome-icon">
+                <BrandMark size={43} />
+              </div>
 
               <h1>
-                Knowledge, at your fingertips.
+                Knowledge, made simple.
               </h1>
 
               <p>
-                Explore your knowledge base with
-                AI-powered questions, semantic search,
-                and document-backed answers.
+                Your documents, your insights. Ask questions,
+                explore sources, and find the answers that matter.
               </p>
 
               <div className="welcome-actions">
@@ -1021,7 +1097,7 @@ function App() {
               {thinking && (
                 <div className="message assistant">
                   <div className="message-avatar">
-                    ✦
+                    <BrandMark size={21} />
                   </div>
 
                   <div className="message-body">
@@ -1041,6 +1117,7 @@ function App() {
           )}
         </div>
 
+        {/* Question composer */}
         <div className="composer-area">
           {selectedDocumentMissing && (
             <div className="error-banner">

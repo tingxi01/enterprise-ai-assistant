@@ -1,13 +1,18 @@
 
 import re
 import time
+import os
 
 import requests
 
 from backend.comparison import build_comparison_context
 
 
-OLLAMA_URL = "http://127.0.0.1:11434/api/chat"
+OLLAMA_URL = os.getenv(
+    "OLLAMA_URL",
+    "http://127.0.0.1:11434/api/chat",
+)
+
 MODEL_NAME = "qwen2.5:3b"
 
 

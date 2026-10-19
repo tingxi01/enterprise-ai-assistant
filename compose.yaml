@@ -1,5 +1,8 @@
 
 services:
+  # ==========================================
+  # PostgreSQL + pgvector
+  # ==========================================
   db:
     image: pgvector/pgvector:pg17
     container_name: enterprise-ai-postgres
@@ -24,5 +27,52 @@ services:
       timeout: 5s
       retries: 10
 
+  # ==========================================
+  # FastAPI Backend
+  # ==========================================
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+
+    container_name: enterprise-ai-backend
+    restart: unless-stopped
+
+    environment:
+      DATABASE_URL: postgresql://enterprise_ai:local_dev_password@db:5432/enterprise_ai
+      OLLAMA_URL: http://host.docker.internal:11434/api/chat
+      HF_HOME: /root/.cache/huggingface
+
+    ports:
+      - "127.0.0.1:8002:8002"
+
+    volumes:
+      - huggingface_cache:/root/.cache/huggingface
+
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # ==========================================
+  # React Frontend + Nginx
+  # ==========================================
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+
+    container_name: enterprise-ai-frontend
+    restart: unless-stopped
+
+    ports:
+      - "127.0.0.1:5175:80"
+
+    depends_on:
+      - backend
+
+# ==========================================
+# Persistent Volumes
+# ==========================================
 volumes:
   postgres_data:
+  huggingface_cache:
