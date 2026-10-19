@@ -1,9 +1,21 @@
 
-import { useRef, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import './App.css'
+
+type DocumentItem = {
+  id: string
+  filename: string
+  pages: number
+  total_chunks: number
+  uploaded_at: string
+}
 
 type Source = {
   chunk_index: number
+  document_chunk_index?: number
+  document_id: string
+  filename: string
+  page_number: number
   text: string
   score: number
 }
@@ -15,12 +27,6 @@ type Message = {
   sources?: Source[]
 }
 
-type UploadResponse = {
-  filename: string
-  pages: number
-  total_chunks: number
-}
-
 type AnswerResponse = {
   answer: string
   sources: Source[]
@@ -30,17 +36,31 @@ type AnswerResponse = {
 let nextMessageId = 1
 
 function App() {
-  const [document, setDocument] = useState<UploadResponse | null>(null)
+  const [documents, setDocuments] = useState<DocumentItem[]>([])
+  const [selectedDocumentId, setSelectedDocumentId] =
+    useState<string | null>(null)
+
   const [messages, setMessages] = useState<Message[]>([])
   const [question, setQuestion] = useState('')
+
   const [uploading, setUploading] = useState(false)
   const [thinking, setThinking] = useState(false)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [loadingDocuments, setLoadingDocuments] = useState(true)
   const [error, setError] = useState('')
+
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  async function readError(response: Response) {
+  const selectedDocument = documents.find(
+    (doc) => doc.id === selectedDocumentId
+  )
+
+  const busy = uploading || thinking || deletingId !== null
+
+  async function readError(response: Response): Promise<string> {
     try {
       const data = await response.json()
+
       return typeof data.detail === 'string'
         ? data.detail
         : `Request failed (${response.status})`
@@ -49,11 +69,68 @@ function App() {
     }
   }
 
+  async function fetchDocuments(): Promise<DocumentItem[]> {
+    const response = await fetch('/api/documents', {
+      cache: 'no-store',
+    })
+
+    if (!response.ok) {
+      throw new Error(await readError(response))
+    }
+
+    const data: { documents: DocumentItem[] } =
+      await response.json()
+
+    return data.documents
+  }
+
+  // Load existing PostgreSQL documents when the page opens.
+  useEffect(() => {
+    let cancelled = false
+
+    async function loadDocuments() {
+      try {
+        const results = await fetchDocuments()
+
+        if (!cancelled) {
+          setDocuments(results)
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(
+            err instanceof Error
+              ? err.message
+              : 'Could not load documents.'
+          )
+        }
+      } finally {
+        if (!cancelled) {
+          setLoadingDocuments(false)
+        }
+      }
+    }
+
+    void loadDocuments()
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  function selectDocument(id: string | null) {
+    if (busy) return
+
+    setSelectedDocumentId(id)
+    setMessages([])
+    setQuestion('')
+    setError('')
+  }
+
   async function uploadDocument(file: File) {
-    if (uploading || thinking) return
+    if (busy) return
 
     if (!file.name.toLowerCase().endsWith('.pdf')) {
-      setError('Please select a PDF document.')
+      setError('Please choose a PDF file.')
       return
     }
 
@@ -78,36 +155,151 @@ function App() {
         throw new Error(await readError(response))
       }
 
-      const data: UploadResponse = await response.json()
+      const uploaded: DocumentItem = await response.json()
 
-      setDocument(data)
+      // Immediately add the uploaded document to the sidebar.
+      setDocuments((previous) => [
+        uploaded,
+        ...previous.filter((doc) => doc.id !== uploaded.id),
+      ])
+
+      setSelectedDocumentId(uploaded.id)
       setMessages([])
       setQuestion('')
+
+      // Synchronize with the database.
+      try {
+        const updated = await fetchDocuments()
+        setDocuments(updated)
+      } catch {
+        setError(
+          'Document uploaded, but the library could not be refreshed.'
+        )
+      }
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : 'Failed to upload document.'
+        err instanceof Error
+          ? err.message
+          : 'Document upload failed.'
       )
+
+      try {
+        const updated = await fetchDocuments()
+        setDocuments(updated)
+      } catch {
+        // Preserve original error.
+      }
     } finally {
       setUploading(false)
+
       if (fileInputRef.current) {
         fileInputRef.current.value = ''
       }
     }
   }
 
+  // Delete from PostgreSQL and immediately update the React sidebar.
+  async function deleteDocument(doc: DocumentItem) {
+    if (busy) return
+
+    const confirmed = window.confirm(
+      `Permanently delete "${doc.filename}" from the knowledge base?`
+    )
+
+    if (!confirmed) return
+
+    setDeletingId(doc.id)
+    setError('')
+
+    try {
+      const response = await fetch(
+        `/api/documents/${encodeURIComponent(doc.id)}`,
+        {
+          method: 'DELETE',
+        }
+      )
+
+      if (!response.ok) {
+        // If the record is already gone, synchronize the UI anyway.
+        if (response.status === 404) {
+          const updated = await fetchDocuments()
+          setDocuments(updated)
+
+          setMessages([])
+
+          if (
+            !updated.some((item) => item.id === selectedDocumentId)
+          ) {
+            setSelectedDocumentId(null)
+          }
+
+          return
+        }
+
+        throw new Error(await readError(response))
+      }
+
+      // Remove the deleted document immediately.
+      setDocuments((previous) =>
+        previous.filter((item) => item.id !== doc.id)
+      )
+
+      // Clear potentially outdated answers and references.
+      setMessages([])
+      setQuestion('')
+
+      if (selectedDocumentId === doc.id) {
+        setSelectedDocumentId(null)
+      }
+
+      // Fetch the authoritative document list from PostgreSQL.
+      try {
+        const updated = await fetchDocuments()
+        setDocuments(updated)
+
+        if (
+          selectedDocumentId !== null &&
+          !updated.some((item) => item.id === selectedDocumentId)
+        ) {
+          setSelectedDocumentId(null)
+        }
+      } catch {
+        setError(
+          'Document deleted successfully, but refreshing the library failed.'
+        )
+      }
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'Failed to delete document.'
+      )
+
+      // Attempt to recover the correct database state.
+      try {
+        const updated = await fetchDocuments()
+        setDocuments(updated)
+      } catch {
+        // Keep the original error.
+      }
+    } finally {
+      setDeletingId(null)
+    }
+  }
+
   async function askQuestion(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
 
-    const trimmedQuestion = question.trim()
+    const text = question.trim()
 
-    if (!trimmedQuestion || !document || thinking || uploading) return
+    if (!text || documents.length === 0 || busy) return
 
     setMessages((previous) => [
       ...previous,
       {
         id: nextMessageId++,
         role: 'user',
-        content: trimmedQuestion,
+        content: text,
       },
     ])
 
@@ -122,8 +314,9 @@ function App() {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          question: trimmedQuestion,
+          question: text,
           top_k: 3,
+          document_id: selectedDocumentId,
         }),
       })
 
@@ -144,7 +337,9 @@ function App() {
       ])
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : 'Failed to generate an answer.'
+        err instanceof Error
+          ? err.message
+          : 'Could not generate an answer.'
       )
     } finally {
       setThinking(false)
@@ -156,70 +351,141 @@ function App() {
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-icon">✦</div>
+
           <div>
             <div className="brand-name">Enterprise AI</div>
-            <div className="brand-subtitle">Knowledge Workspace</div>
+            <div className="brand-subtitle">
+              Knowledge Workspace
+            </div>
           </div>
         </div>
 
         <button
           className="new-chat-button"
+          disabled={busy}
           onClick={() => {
             setMessages([])
+            setQuestion('')
             setError('')
           }}
         >
-          <span>＋</span> New chat
+          ＋ New chat
         </button>
 
         <div className="sidebar-section">
           <div className="section-heading">WORKSPACE</div>
 
           <div className="sidebar-link active">
-            <span>▤</span> AI Assistant
+            ▤ &nbsp; AI Assistant
           </div>
         </div>
 
         <div className="sidebar-section">
-          <div className="section-heading">KNOWLEDGE BASE</div>
+          <div className="section-heading">
+            KNOWLEDGE BASE
+          </div>
 
-          {document ? (
-            <div className="document-item">
-              <span className="document-symbol">▧</span>
-              <div className="document-info">
-                <div className="document-name">{document.filename}</div>
-                <div className="document-meta">
-                  {document.pages} pages · {document.total_chunks} chunks
-                </div>
-              </div>
-            </div>
+          <button
+            className={`document-filter ${
+              selectedDocumentId === null ? 'selected' : ''
+            }`}
+            onClick={() => selectDocument(null)}
+            disabled={busy}
+          >
+            <span>▦</span>
+            <span>All documents</span>
+
+            <span className="document-count">
+              {documents.length}
+            </span>
+          </button>
+
+          {loadingDocuments ? (
+            <p className="sidebar-hint">
+              Loading documents...
+            </p>
+          ) : documents.length === 0 ? (
+            <p className="sidebar-hint">
+              No documents uploaded yet
+            </p>
           ) : (
-            <p className="sidebar-hint">No documents uploaded</p>
+            <div className="document-list">
+              {documents.map((doc) => (
+                <div
+                  key={doc.id}
+                  className={`library-document ${
+                    selectedDocumentId === doc.id
+                      ? 'selected'
+                      : ''
+                  }`}
+                >
+                  <button
+                    className="library-document-select"
+                    disabled={busy}
+                    title={doc.filename}
+                    onClick={() => selectDocument(doc.id)}
+                  >
+                    <span className="document-symbol">
+                      ▧
+                    </span>
+
+                    <span className="document-info">
+                      <span className="document-name">
+                        {doc.filename}
+                      </span>
+
+                      <span className="document-meta">
+                        {doc.pages} pages ·{' '}
+                        {doc.total_chunks} chunks
+                      </span>
+                    </span>
+                  </button>
+
+                  <button
+                    className="delete-document"
+                    title={`Delete ${doc.filename}`}
+                    aria-label={`Delete ${doc.filename}`}
+                    disabled={busy}
+                    onClick={() => void deleteDocument(doc)}
+                  >
+                    {deletingId === doc.id ? '…' : '×'}
+                  </button>
+                </div>
+              ))}
+            </div>
           )}
 
           <button
             className="upload-secondary"
+            disabled={busy}
             onClick={() => fileInputRef.current?.click()}
-            disabled={uploading || thinking}
           >
-            {uploading ? 'Uploading...' : '+ Upload document'}
+            {uploading
+              ? 'Uploading...'
+              : '+ Upload document'}
           </button>
         </div>
 
         <div className="sidebar-footer">
-          <div className="status-dot" />
-          <span>Local AI · Qwen3 4B</span>
+          <span className="status-dot" />
+          Local AI · Qwen3 4B
         </div>
       </aside>
 
       <main className="main-area">
         <header className="topbar">
           <div>
-            <div className="topbar-title">AI Assistant</div>
+            <div className="topbar-title">
+              AI Assistant
+            </div>
+
             <div className="topbar-subtitle">
-              Ask questions grounded in your documents
+              {selectedDocument
+                ? `Searching: ${selectedDocument.filename}`
+                : `Searching all documents (${documents.length})`}
             </div>
           </div>
+
           <div className="model-pill">
             <span className="model-dot" />
             Qwen3 4B
@@ -230,28 +496,40 @@ function App() {
           {messages.length === 0 ? (
             <div className="welcome">
               <div className="welcome-icon">✦</div>
-              <h1>Knowledge, at your fingertips.</h1>
+
+              <h1>
+                Knowledge, at your fingertips.
+              </h1>
+
               <p>
-                Upload a document and get AI-powered answers
-                grounded in your own information.
+                Explore your knowledge base with
+                AI-powered questions, semantic search,
+                and document-backed answers.
               </p>
 
               <div className="welcome-actions">
                 <button
                   className="primary-button"
+                  disabled={busy}
                   onClick={() => fileInputRef.current?.click()}
-                  disabled={uploading || thinking}
                 >
-                  {uploading ? 'Processing...' : '↑ Upload a PDF'}
+                  {uploading
+                    ? 'Processing...'
+                    : '↑ Upload a PDF'}
                 </button>
               </div>
 
-              {document && (
+              {documents.length > 0 && (
                 <div className="ready-card">
                   <span className="ready-dot" />
+
                   <span>
-                    <strong>{document.filename}</strong> is ready.
-                    Ask a question below.
+                    <strong>
+                      {selectedDocument
+                        ? selectedDocument.filename
+                        : `${documents.length} documents`}
+                    </strong>{' '}
+                    ready to search.
                   </span>
                 </div>
               )}
@@ -260,19 +538,26 @@ function App() {
                 <div className="feature-card">
                   <div className="feature-icon">⌕</div>
                   <strong>Semantic search</strong>
-                  <span>Find information beyond keyword matching.</span>
+                  <span>
+                    Find relevant information
+                    across documents.
+                  </span>
                 </div>
 
                 <div className="feature-card">
                   <div className="feature-icon">✧</div>
                   <strong>AI-powered answers</strong>
-                  <span>Generate responses based on document context.</span>
+                  <span>
+                    Get responses using retrieved context.
+                  </span>
                 </div>
 
                 <div className="feature-card">
                   <div className="feature-icon">▤</div>
                   <strong>Source references</strong>
-                  <span>Inspect the retrieved excerpts behind an answer.</span>
+                  <span>
+                    See document names and page numbers.
+                  </span>
                 </div>
               </div>
             </div>
@@ -284,7 +569,9 @@ function App() {
                   className={`message ${message.role}`}
                 >
                   <div className="message-avatar">
-                    {message.role === 'assistant' ? '✦' : 'U'}
+                    {message.role === 'assistant'
+                      ? '✦'
+                      : 'U'}
                   </div>
 
                   <div className="message-body">
@@ -298,44 +585,64 @@ function App() {
                       {message.content}
                     </div>
 
-                    {message.sources && message.sources.length > 0 && (
-                      <details className="sources">
-                        <summary>
-                          View retrieved sources ({message.sources.length})
-                        </summary>
+                    {message.sources &&
+                      message.sources.length > 0 && (
+                        <details className="sources">
+                          <summary>
+                            View retrieved sources (
+                            {message.sources.length})
+                          </summary>
 
-                        <div className="source-list">
-                          {message.sources.map((source) => (
-                            <div
-                              className="source-card"
-                              key={source.chunk_index}
-                            >
-                              <div className="source-heading">
-                                <strong>
-                                  Source {source.chunk_index + 1}
-                                </strong>
-                                <span>
-                                  Similarity {source.score.toFixed(3)}
-                                </span>
-                              </div>
-                              <p>{source.text}</p>
-                            </div>
-                          ))}
-                        </div>
-                      </details>
-                    )}
+                          <div className="source-list">
+                            {message.sources.map(
+                              (source, index) => (
+                                <div
+                                  className="source-card"
+                                  key={`${message.id}-${index}`}
+                                >
+                                  <div className="source-heading">
+                                    <strong>
+                                      Source{' '}
+                                      {source.chunk_index + 1}
+                                    </strong>
+
+                                    <span>
+                                      Similarity{' '}
+                                      {source.score.toFixed(3)}
+                                    </span>
+                                  </div>
+
+                                  <div className="source-location">
+                                    ▧ {source.filename} ·
+                                    Page {source.page_number}
+                                  </div>
+
+                                  <p>{source.text}</p>
+                                </div>
+                              )
+                            )}
+                          </div>
+                        </details>
+                      )}
                   </div>
                 </div>
               ))}
 
               {thinking && (
                 <div className="message assistant">
-                  <div className="message-avatar">✦</div>
+                  <div className="message-avatar">
+                    ✦
+                  </div>
+
                   <div className="message-body">
-                    <div className="message-author">Enterprise AI</div>
+                    <div className="message-author">
+                      Enterprise AI
+                    </div>
+
                     <div className="thinking-message">
                       <span className="loader" />
-                      Analyzing your document...
+                      Searching documents and
+                      generating an answer...
                     </div>
                   </div>
                 </div>
@@ -345,24 +652,39 @@ function App() {
         </div>
 
         <div className="composer-area">
-          {error && <div className="error-banner">{error}</div>}
+          {error && (
+            <div className="error-banner">
+              {error}
+            </div>
+          )}
 
-          <form className="composer" onSubmit={askQuestion}>
+          <form
+            className="composer"
+            onSubmit={askQuestion}
+          >
             <input
               value={question}
-              onChange={(event) => setQuestion(event.target.value)}
-              placeholder={
-                document
-                  ? 'Ask a question about your document...'
-                  : 'Upload a PDF to start asking questions...'
+              onChange={(event) =>
+                setQuestion(event.target.value)
               }
-              disabled={!document || thinking || uploading}
+              disabled={
+                documents.length === 0 || busy
+              }
+              placeholder={
+                documents.length
+                  ? 'Ask a question about your documents...'
+                  : 'Upload a PDF to get started...'
+              }
             />
 
             <button
-              className="send-button"
               type="submit"
-              disabled={!document || !question.trim() || thinking || uploading}
+              className="send-button"
+              disabled={
+                !question.trim() ||
+                documents.length === 0 ||
+                busy
+              }
               aria-label="Send question"
             >
               ↑
@@ -370,7 +692,8 @@ function App() {
           </form>
 
           <div className="composer-caption">
-            Powered by local AI · Verify important information against sources
+            Powered by local AI · Verify important
+            answers against sources
           </div>
         </div>
       </main>
@@ -382,7 +705,10 @@ function App() {
         hidden
         onChange={(event) => {
           const file = event.target.files?.[0]
-          if (file) void uploadDocument(file)
+
+          if (file) {
+            void uploadDocument(file)
+          }
         }}
       />
     </div>

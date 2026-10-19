@@ -1,26 +1,46 @@
 
+/* =====================================================
+   ENTERPRISE AI ASSISTANT
+   Complete Application Stylesheet
+   ===================================================== */
+
+/* Root Layout */
+
 #root {
   width: 100%;
+  max-width: none;
   min-height: 100vh;
+  margin: 0;
+  padding: 0;
+  display: block;
+  text-align: left;
+  border: none;
 }
 
 .app-shell {
   display: flex;
+  width: 100%;
   min-height: 100vh;
   background: #0c1019;
   color: #eef0f7;
+  text-align: left;
 }
 
-/* Sidebar */
+/* =====================================================
+   SIDEBAR
+   ===================================================== */
 
 .sidebar {
   width: 264px;
   min-width: 264px;
+  height: 100vh;
   padding: 28px 18px 20px;
   background: #101521;
   border-right: 1px solid #252c3b;
+
   display: flex;
   flex-direction: column;
+  overflow-y: auto;
 }
 
 .brand {
@@ -35,13 +55,18 @@
 .welcome-icon {
   display: grid;
   place-items: center;
-  background: linear-gradient(135deg, #7974ec, #a37aff);
+  background: linear-gradient(
+    135deg,
+    #7974ec,
+    #a37aff
+  );
   color: white;
 }
 
 .brand-icon {
   width: 40px;
   height: 40px;
+  flex-shrink: 0;
   border-radius: 12px;
   font-size: 25px;
 }
@@ -74,13 +99,7 @@
   font-weight: 600;
 }
 
-.new-chat-button span {
-  margin-right: 8px;
-  font-size: 18px;
-}
-
-.new-chat-button:hover,
-.upload-secondary:hover {
+.new-chat-button:hover {
   background: #302e4a;
 }
 
@@ -104,31 +123,114 @@
   color: #aab3c6;
 }
 
-.sidebar-link span {
-  margin-right: 10px;
-}
-
 .sidebar-link.active {
   color: #ddd7ff;
   background: #242439;
 }
 
-.document-item {
+.sidebar-footer {
+  margin-top: auto;
   display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #98a2b5;
+  font-size: 11px;
+  padding: 24px 8px 0;
+}
+
+.status-dot,
+.model-dot,
+.ready-dot {
+  width: 7px;
+  height: 7px;
+  flex-shrink: 0;
+  background: #59cba3;
+  border-radius: 50%;
+}
+
+/* =====================================================
+   DOCUMENT LIBRARY
+   ===================================================== */
+
+.document-filter {
+  width: 100%;
+  display: flex;
+  align-items: center;
   gap: 10px;
-  padding: 10px;
-  background: #1c2230;
-  border: 1px solid #30384a;
+  padding: 12px;
+  border: 1px solid transparent;
   border-radius: 10px;
+  background: transparent;
+  color: #aeb8cb;
+  text-align: left;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.document-filter.selected,
+.library-document.selected {
+  background: #282741;
+  border-color: #555080;
+  color: #e8e2ff;
+}
+
+.document-filter:hover,
+.library-document:hover {
+  background: #242b3b;
+}
+
+.document-count {
+  margin-left: auto;
+  padding: 3px 7px;
+  background: #343950;
+  border-radius: 6px;
+  font-size: 11px;
+}
+
+.document-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-top: 10px;
+  max-height: 42vh;
+  overflow-y: auto;
+}
+
+.library-document {
+  display: flex;
+  align-items: center;
+  border: 1px solid #2e3546;
+  border-radius: 10px;
+  background: #1a2130;
+  overflow: hidden;
+}
+
+.library-document-select {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+  padding: 11px 8px;
+  border: none;
+  background: transparent;
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
 }
 
 .document-symbol {
   color: #aa9aff;
   font-size: 22px;
+  flex-shrink: 0;
 }
 
 .document-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
   min-width: 0;
+  flex: 1;
 }
 
 .document-name {
@@ -150,6 +252,24 @@
   padding: 0 12px;
 }
 
+.delete-document {
+  margin-right: 8px;
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #9ca6b8;
+  font-size: 19px;
+  cursor: pointer;
+}
+
+.delete-document:hover {
+  background: #56313c;
+  color: #ffb4bf;
+}
+
 .upload-secondary {
   margin-top: 12px;
   background: transparent;
@@ -158,27 +278,21 @@
   font-size: 12px;
 }
 
-.sidebar-footer {
-  margin-top: auto;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: #98a2b5;
-  font-size: 11px;
-  padding: 16px 8px 0;
+.upload-secondary:hover {
+  background: #302e4a;
 }
 
-.status-dot,
-.model-dot,
-.ready-dot {
-  width: 7px;
-  height: 7px;
-  flex-shrink: 0;
-  background: #59cba3;
-  border-radius: 50%;
+.document-filter:disabled,
+.library-document button:disabled,
+.new-chat-button:disabled,
+.upload-secondary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
-/* Main */
+/* =====================================================
+   MAIN CONTENT AREA
+   ===================================================== */
 
 .main-area {
   flex: 1;
@@ -207,12 +321,14 @@
   color: #8791a5;
   font-size: 12px;
   margin-top: 5px;
+  overflow-wrap: anywhere;
 }
 
 .model-pill {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-shrink: 0;
   padding: 9px 13px;
   background: #191f2d;
   border: 1px solid #30384a;
@@ -227,6 +343,10 @@
   overflow-y: auto;
   padding: 35px 28px;
 }
+
+/* =====================================================
+   WELCOME SCREEN
+   ===================================================== */
 
 .welcome {
   width: 100%;
@@ -248,6 +368,7 @@
   font-size: clamp(28px, 4vw, 42px);
   letter-spacing: -1.5px;
   font-weight: 650;
+  line-height: 1.2;
   margin: 0 0 15px;
 }
 
@@ -277,6 +398,11 @@
   background: #9889f5;
 }
 
+.primary-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .ready-card {
   display: flex;
   align-items: center;
@@ -297,7 +423,10 @@
 .feature-grid {
   margin-top: 60px;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(
+    3,
+    minmax(0, 1fr)
+  );
   gap: 15px;
   text-align: left;
 }
@@ -327,17 +456,22 @@
   line-height: 1.6;
 }
 
-/* Messages */
+/* =====================================================
+   CHAT MESSAGES
+   ===================================================== */
 
 .messages {
+  width: 100%;
   max-width: 850px;
   margin: 0 auto;
+  text-align: left;
 }
 
 .message {
   display: flex;
   gap: 15px;
   margin-bottom: 34px;
+  text-align: left;
 }
 
 .message-avatar {
@@ -361,6 +495,7 @@
 .message-body {
   flex: 1;
   min-width: 0;
+  text-align: left;
 }
 
 .message-author {
@@ -375,7 +510,12 @@
   line-height: 1.85;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  text-align: left;
 }
+
+/* =====================================================
+   SOURCE REFERENCES
+   ===================================================== */
 
 .sources {
   margin-top: 20px;
@@ -416,6 +556,14 @@
   color: #8591a5;
 }
 
+.source-location {
+  color: #b5aaff;
+  font-size: 12px;
+  margin-top: 10px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
 .source-card p {
   font-size: 12px;
   line-height: 1.7;
@@ -423,6 +571,10 @@
   margin-bottom: 0;
   overflow-wrap: anywhere;
 }
+
+/* =====================================================
+   AI LOADING STATE
+   ===================================================== */
 
 .thinking-message {
   color: #aab4c7;
@@ -442,10 +594,14 @@
 }
 
 @keyframes spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
-/* Input */
+/* =====================================================
+   CHAT INPUT
+   ===================================================== */
 
 .composer-area {
   padding: 16px 32px 25px;
@@ -486,6 +642,7 @@
 .send-button {
   width: 38px;
   height: 38px;
+  flex-shrink: 0;
   border: none;
   border-radius: 10px;
   background: #8675eb;
@@ -494,9 +651,11 @@
   cursor: pointer;
 }
 
-.send-button:disabled,
-.primary-button:disabled,
-.upload-secondary:disabled {
+.send-button:hover {
+  background: #9889f5;
+}
+
+.send-button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
@@ -507,6 +666,10 @@
   font-size: 11px;
   margin-top: 12px;
 }
+
+/* =====================================================
+   ERROR MESSAGES
+   ===================================================== */
 
 .error-banner {
   max-width: 850px;
@@ -519,27 +682,79 @@
   font-size: 12px;
 }
 
-@media (max-width: 780px) {
+/* =====================================================
+   RESPONSIVE LAYOUT
+   ===================================================== */
+
+@media (max-width: 900px) {
   .sidebar {
-    width: 76px;
-    min-width: 76px;
-    padding: 20px 10px;
-  }
-
-  .brand {
-    justify-content: center;
-    padding: 0;
-  }
-
-  .brand > div:last-child,
-  .sidebar-section,
-  .sidebar-footer,
-  .new-chat-button {
-    display: none;
+    width: 230px;
+    min-width: 230px;
   }
 
   .topbar {
+    padding: 16px 22px;
+  }
+
+  .chat-content {
+    padding: 25px 20px;
+  }
+
+  .feature-grid {
+    gap: 10px;
+  }
+
+  .feature-card {
     padding: 16px;
+  }
+}
+
+@media (max-width: 680px) {
+  .app-shell {
+    flex-direction: column;
+  }
+
+  .sidebar {
+    width: 100%;
+    min-width: 0;
+    height: auto;
+    max-height: 280px;
+    padding: 16px;
+    border-right: none;
+    border-bottom: 1px solid #252c3b;
+  }
+
+  .brand {
+    margin-bottom: 14px;
+  }
+
+  .sidebar-section {
+    margin-top: 14px;
+  }
+
+  .sidebar-footer {
+    display: none;
+  }
+
+  .document-list {
+    max-height: 110px;
+  }
+
+  .main-area {
+    width: 100%;
+    height: calc(100dvh - 280px);
+    min-height: 450px;
+  }
+
+  .topbar {
+    height: auto;
+    min-height: 68px;
+    padding: 12px 16px;
+  }
+
+  .model-pill {
+    padding: 7px 9px;
+    font-size: 10px;
   }
 
   .chat-content {
@@ -547,15 +762,23 @@
   }
 
   .welcome {
-    margin-top: 30px;
+    margin-top: 20px;
+  }
+
+  .welcome h1 {
+    font-size: 28px;
   }
 
   .feature-grid {
     grid-template-columns: 1fr;
-    margin-top: 35px;
+    margin-top: 30px;
   }
 
   .composer-area {
-    padding: 14px;
+    padding: 12px;
+  }
+
+  .message {
+    gap: 10px;
   }
 }

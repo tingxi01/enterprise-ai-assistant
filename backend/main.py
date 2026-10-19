@@ -1,254 +1,237 @@
 
-from fastapi import FastAPI, UploadFile, File, HTTPException
-from pydantic import BaseModel, Field
-from backend.llm import generate_answer
+from contextlib import asynccontextmanager
+from uuid import UUID
+
 import fitz
+from fastapi import FastAPI, File, HTTPException, UploadFile
+from pydantic import BaseModel, Field
 
 from backend.chunking import split_text
+from backend.db import initialize_database
 from backend.embeddings import generate_embeddings
-from backend.search import semantic_search
+from backend.llm import generate_answer
+from backend.repository import (
+    delete_document,
+    list_documents,
+    save_document,
+    search_documents,
+)
 
 
-# --------------------------------------------------
-# Application Configuration
-# --------------------------------------------------
+MAX_FILE_SIZE = 10 * 1024 * 1024
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    initialize_database()
+    yield
+
 
 app = FastAPI(
     title="Enterprise AI Assistant",
-    description="Backend API for an AI-powered enterprise knowledge assistant",
-    version="0.1.0"
+    description="AI-powered enterprise knowledge assistant",
+    version="0.2.0",
+    lifespan=lifespan,
 )
 
-MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
-
-
-# --------------------------------------------------
-# Temporary Document Storage
-# --------------------------------------------------
-
-# These variables temporarily store one uploaded document.
-# They will be replaced with a database in the future.
-
-document_chunks: list[str] = []
-document_embeddings: list[list[float]] = []
-
-
-# --------------------------------------------------
-# Request Models
-# --------------------------------------------------
 
 class SearchRequest(BaseModel):
-    question: str
+    question: str = Field(min_length=1)
     top_k: int = Field(default=3, ge=1, le=20)
+    document_id: UUID | None = None
 
-
-# --------------------------------------------------
-# Basic Endpoints
-# --------------------------------------------------
 
 @app.get("/")
 def home():
     return {
         "message": "Welcome to Enterprise AI Assistant!",
-        "status": "running"
+        "status": "running",
     }
 
 
 @app.get("/health")
 def health_check():
-    return {
-        "status": "healthy"
-    }
+    return {"status": "healthy"}
 
-
-# --------------------------------------------------
-# PDF Upload and Processing
-# --------------------------------------------------
 
 @app.post("/documents/upload")
 async def upload_document(file: UploadFile = File(...)):
-
-    # Validate file extension
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(
             status_code=400,
-            detail="Only PDF files are supported."
+            detail="Only PDF files are supported.",
         )
 
-    # Read file with size limit
     pdf_bytes = await file.read(MAX_FILE_SIZE + 1)
     await file.close()
 
     if len(pdf_bytes) > MAX_FILE_SIZE:
         raise HTTPException(
             status_code=413,
-            detail="PDF must be 10 MB or smaller."
+            detail="PDF must be 10 MB or smaller.",
         )
 
-    # Step 1: Extract text from PDF
     try:
         with fitz.open(stream=pdf_bytes, filetype="pdf") as pdf:
-
             if pdf.needs_pass:
                 raise HTTPException(
                     status_code=400,
-                    detail="Password-protected PDFs are not supported."
+                    detail="Password-protected PDFs are not supported.",
                 )
 
-            page_count = len(pdf)
-
-            extracted_text = "\n".join(
-                page.get_text() for page in pdf
-            )
+            pages = [page.get_text() for page in pdf]
 
     except HTTPException:
         raise
-
     except Exception as exc:
         raise HTTPException(
             status_code=400,
-            detail="Unable to process this PDF."
+            detail="Unable to process this PDF.",
         ) from exc
 
-    # Step 2: Check extracted text
-    if not extracted_text.strip():
+    if not any(page.strip() for page in pages):
         raise HTTPException(
             status_code=422,
-            detail="No readable text found in the PDF."
+            detail="No readable text found in the PDF.",
         )
 
-    # Step 3: Split document into chunks
-    chunks = split_text(
-        text=extracted_text,
-        chunk_size=500,
-        overlap=100
-    )
+    # Keep page numbers associated with text chunks.
+    numbered_chunks = []
 
-    if not chunks:
+    for page_number, page_text in enumerate(pages, start=1):
+        page_chunks = split_text(
+            text=page_text,
+            chunk_size=500,
+            overlap=100,
+        )
+
+        for chunk in page_chunks:
+            numbered_chunks.append((page_number, chunk))
+
+    if not numbered_chunks:
         raise HTTPException(
             status_code=422,
-            detail="Unable to generate text chunks."
+            detail="Unable to generate text chunks.",
         )
 
-    # Step 4: Generate embeddings once
     try:
-        new_embeddings = generate_embeddings(chunks)
+        embeddings = generate_embeddings(
+            [content for _, content in numbered_chunks]
+        )
+
+        document_id = save_document(
+            filename=file.filename,
+            pages=pages,
+            chunks=numbered_chunks,
+            embeddings=embeddings,
+        )
 
     except Exception as exc:
         raise HTTPException(
             status_code=500,
-            detail="Failed to generate document embeddings."
+            detail="Failed to process or save document.",
         ) from exc
 
-    # Step 5: Verify embedding count
-    if len(new_embeddings) != len(chunks):
-        raise HTTPException(
-            status_code=500,
-            detail="Embedding count does not match chunk count."
-        )
-
-    # Step 6: Store document data in memory
-    # Replace both only after processing succeeds.
-    document_chunks.clear()
-    document_chunks.extend(chunks)
-
-    document_embeddings.clear()
-    document_embeddings.extend(new_embeddings)
-
     return {
+        "id": document_id,
         "filename": file.filename,
-        "pages": page_count,
-        "characters_extracted": len(extracted_text),
-        "total_chunks": len(chunks),
-        "chunk_previews": chunks[:3],
-        "status": "processed"
+        "pages": len(pages),
+        "characters_extracted": sum(len(page) for page in pages),
+        "total_chunks": len(numbered_chunks),
+        "chunk_previews": [
+            content for _, content in numbered_chunks[:3]
+        ],
+        "status": "processed",
     }
 
 
-# --------------------------------------------------
-# Semantic Document Search
-# --------------------------------------------------
-
-@app.post("/documents/search")
-def search_document(request: SearchRequest):
-
-    if not document_chunks or not document_embeddings:
-        raise HTTPException(
-            status_code=404,
-            detail="No document uploaded yet."
-        )
-
-    if not request.question.strip():
-        raise HTTPException(
-            status_code=400,
-            detail="Question cannot be empty."
-        )
-
+@app.get("/documents")
+def get_documents():
     try:
-        results = semantic_search(
-            query=request.question,
-            chunks=document_chunks,
-            chunk_embeddings=document_embeddings,
-            top_k=request.top_k
-        )
-
+        return {"documents": list_documents()}
     except Exception as exc:
         raise HTTPException(
             status_code=500,
-            detail="Semantic search failed."
+            detail="Failed to retrieve documents.",
         ) from exc
+
+
+@app.delete("/documents/{document_id}")
+def remove_document(document_id: UUID):
+    try:
+        deleted = delete_document(document_id)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to delete document.",
+        ) from exc
+
+    if not deleted:
+        raise HTTPException(
+            status_code=404,
+            detail="Document not found.",
+        )
+
+    return {"status": "deleted", "document_id": str(document_id)}
+
+
+def retrieve_context(request: SearchRequest):
+    if not request.question.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Question cannot be empty.",
+        )
+
+    try:
+        results = search_documents(
+            question=request.question,
+            top_k=request.top_k,
+            document_id=request.document_id,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Document search failed.",
+        ) from exc
+
+    if not results:
+        raise HTTPException(
+            status_code=404,
+            detail="No matching document content found.",
+        )
+
+    return results
+
+
+@app.post("/documents/search")
+def search_document(request: SearchRequest):
+    results = retrieve_context(request)
 
     return {
         "question": request.question,
         "results": results,
-        "total_results": len(results)
+        "total_results": len(results),
     }
 
 
-# --------------------------------------------------
-# AI-Powered Document Question Answering
-# --------------------------------------------------
-
 @app.post("/documents/ask")
 def ask_document(request: SearchRequest):
+    results = retrieve_context(request)
 
-    if not document_chunks or not document_embeddings:
-        raise HTTPException(
-            status_code=404,
-            detail="Upload a document before asking questions."
-        )
-
-    if not request.question.strip():
-        raise HTTPException(
-            status_code=400,
-            detail="Question cannot be empty."
-        )
-
-    # Step 1: Retrieve relevant document sections
-    results = semantic_search(
-        query=request.question,
-        chunks=document_chunks,
-        chunk_embeddings=document_embeddings,
-        top_k=request.top_k
-    )
-
-    # Step 2: Generate an answer with Qwen3
     try:
         answer = generate_answer(
             question=request.question,
-            retrieved_chunks=results
+            retrieved_chunks=results,
         )
-
     except Exception as exc:
         raise HTTPException(
             status_code=503,
-            detail="Unable to connect to the local AI model."
+            detail="Unable to generate an AI answer.",
         ) from exc
 
-    # Step 3: Return the answer and supporting chunks
     return {
         "question": request.question,
         "answer": answer,
         "sources": results,
-        "model": "qwen3:4b"
+        "model": "qwen3:4b",
     }
