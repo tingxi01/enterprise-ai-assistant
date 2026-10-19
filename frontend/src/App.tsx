@@ -34,14 +34,85 @@ type AnswerResponse = {
   resolved_question?: string
 }
 
+
+const CHAT_STORAGE_KEY = 'enterprise-ai-current-chat'
+
+type SavedChat = {
+  selectedDocumentId: string | null
+  messages: Message[]
+}
+
+function loadSavedChat(): SavedChat {
+  const emptyChat: SavedChat = {
+    selectedDocumentId: null,
+    messages: [],
+  }
+
+  try {
+    const stored = localStorage.getItem(CHAT_STORAGE_KEY)
+
+    if (!stored) return emptyChat
+
+    const parsed: unknown = JSON.parse(stored)
+
+    if (!parsed || typeof parsed !== 'object') {
+      return emptyChat
+    }
+
+    const chat = parsed as Partial<SavedChat>
+
+    if (
+      chat.selectedDocumentId !== null &&
+      typeof chat.selectedDocumentId !== 'string'
+    ) {
+      return emptyChat
+    }
+
+    if (!Array.isArray(chat.messages)) {
+      return emptyChat
+    }
+
+    const validMessages = chat.messages.every(
+      (message) =>
+        message &&
+        typeof message === 'object' &&
+        typeof message.id === 'number' &&
+        (message.role === 'user' ||
+          message.role === 'assistant') &&
+        typeof message.content === 'string'
+    )
+
+    if (!validMessages) return emptyChat
+
+    return {
+      selectedDocumentId: chat.selectedDocumentId,
+      messages: chat.messages,
+    }
+  } catch {
+    return emptyChat
+  }
+}
+
+
 let nextMessageId = 1
 
 function App() {
   const [documents, setDocuments] = useState<DocumentItem[]>([])
-  const [selectedDocumentId, setSelectedDocumentId] =
-    useState<string | null>(null)
+  
+  const [savedChat] = useState(loadSavedChat)
 
-  const [messages, setMessages] = useState<Message[]>([])
+  const [selectedDocumentId, setSelectedDocumentId] =
+    useState<string | null>(savedChat.selectedDocumentId)
+
+  const [messages, setMessages] =
+    useState<Message[]>(savedChat.messages)
+    
+
+  nextMessageId = Math.max(
+    nextMessageId,
+    ...savedChat.messages.map((message) => message.id + 1)
+  )
+
   const [question, setQuestion] = useState('')
 
   const [uploading, setUploading] = useState(false)
@@ -57,6 +128,23 @@ function App() {
   )
 
   const busy = uploading || thinking || deletingId !== null
+
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        CHAT_STORAGE_KEY,
+        JSON.stringify({
+          selectedDocumentId,
+          messages,
+        })
+      )
+    } catch {
+      // Storage may be unavailable or full.
+      // The chat can still function in memory.
+    }
+  }, [selectedDocumentId, messages])
+
 
   async function readError(response: Response): Promise<string> {
     try {
