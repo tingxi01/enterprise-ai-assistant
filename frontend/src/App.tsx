@@ -315,7 +315,7 @@ function App() {
         },
         body: JSON.stringify({
           question: text,
-          top_k: 3,
+          top_k: 5,
           document_id: selectedDocumentId,
         }),
       })
@@ -468,7 +468,7 @@ function App() {
 
         <div className="sidebar-footer">
           <span className="status-dot" />
-          Local AI · Qwen3 4B
+          Local AI · Qwen2.5 3B
         </div>
       </aside>
 
@@ -488,7 +488,7 @@ function App() {
 
           <div className="model-pill">
             <span className="model-dot" />
-            Qwen3 4B
+            Qwen2.5 3B
           </div>
         </header>
 
