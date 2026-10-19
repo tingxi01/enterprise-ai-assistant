@@ -1,0 +1,177 @@
+
+[
+  {
+    "id": "photo_editing",
+    "document": "ORANGE.pdf",
+    "question": "How do I replace a photo in my Canva template? List every step in the document in order, including Step 3.",
+    "expected_keywords": [
+      "ungroup",
+      "detach",
+      "upload",
+      "adjust",
+      "repeat"
+    ],
+    "required_step_order": [
+      "ungroup",
+      "detach",
+      "upload",
+      "adjust",
+      "repeat"
+    ],
+    "should_abstain": false
+  },
+  {
+    "id": "publish_website",
+    "document": "ORANGE.pdf",
+    "question": "How do I publish my Canva website?",
+    "expected_keywords": [
+      "share",
+      "website",
+      "publish"
+    ],
+    "should_abstain": false
+  },
+  {
+    "id": "change_music",
+    "document": "ORANGE.pdf",
+    "question": "How do I change the music player?",
+    "expected_keywords": [
+      "youtube",
+      "link"
+    ],
+    "should_abstain": false
+  },
+  {
+    "id": "orange_unknown_revenue",
+    "document": "ORANGE.pdf",
+    "question": "What was the company's annual revenue in 2025?",
+    "should_abstain": true
+  },
+  {
+    "id": "orange_unknown_ceo",
+    "document": "ORANGE.pdf",
+    "question": "Who was the company's CEO in 2025?",
+    "should_abstain": true
+  },
+  {
+    "id": "full_time_hours",
+    "document": "Employee-Handbook.pdf",
+    "question": "How many hours per week must full-time employees work?",
+    "required_facts": {
+      "minimum 30 hours": "\\b30\\s+hours?\\b"
+    },
+    "should_abstain": false
+  },
+  {
+    "id": "referral_bonus",
+    "document": "Employee-Handbook.pdf",
+    "question": "What is the standard employee referral bonus?",
+    "required_facts": {
+      "3000 dollar bonus": "(?:\\$\\s*3,?000|\\b3,?000\\s+dollars?\\b)"
+    },
+    "should_abstain": false
+  },
+  {
+    "id": "training_budget",
+    "document": "Employee-Handbook.pdf",
+    "question": "What is the annual training and development budget per employee?",
+    "required_facts": {
+      "1000 annual budget": "(?:\\$\\s*1,?000|\\b1,?000\\s+dollars?\\b)"
+    },
+    "should_abstain": false
+  },
+  {
+    "id": "wfh_days",
+    "document": "Employee-Handbook.pdf",
+    "question": "How many days per week can employees normally work from home?",
+    "required_facts": {
+      "one day per week": "\\b(?:one|1)\\s+day\\s+per\\s+week\\b"
+    },
+    "should_abstain": false
+  },
+  {
+    "id": "wfh_notice",
+    "document": "Employee-Handbook.pdf",
+    "question": "How far in advance must employees request to work from home?",
+    "required_facts": {
+      "two days notice": "\\b(?:two|2)\\s+days?\\b"
+    },
+    "should_abstain": false
+  },
+  {
+    "id": "remote_work_limit",
+    "document": "Employee-Handbook.pdf",
+    "question": "What is the maximum duration of temporary remote working for office-based employees per year?",
+    "required_facts": {
+      "two consecutive weeks": "\\b(?:two|2)\\s+consecutive\\s+weeks?\\b",
+      "annual limit": "\\b(?:per\\s+year|each\\s+year|annually|annual)\\b"
+    },
+    "should_abstain": false
+  },
+  {
+    "id": "wfh_remote_comparison",
+    "document": "Employee-Handbook.pdf",
+    "question": "What is the difference between working from home and remote working, including their limits and advance notice requirements?",
+    "required_facts": {
+      "WFH one day per week": "\\b(?:one|1)\\s+day\\s+per\\s+week\\b",
+      "WFH two days notice": "\\b(?:two|2)\\s+days?\\b",
+      "remote two consecutive weeks": "\\b(?:two|2)\\s+consecutive\\s+weeks?\\b",
+      "remote one week notice": "\\b(?:one|1)\\s+week\\b",
+      "annual remote limit": "\\b(?:per\\s+year|each\\s+year|annually|annual)\\b"
+    },
+    "should_abstain": false
+  },
+  {
+    "id": "relative_referral",
+    "document": "Employee-Handbook.pdf",
+    "question": "Can employees refer their relatives for jobs, and are they allowed to participate in the hiring committee?",
+    "required_facts": {
+      "referrals permitted": "\\b(?:can|may|allowed to|permitted to)\\s+refer\\b",
+      "committee participation prohibited": "(?:\\b(?:cannot|can't|must not|not allowed|prohibited)\\b.{0,90}\\b(?:hiring committee|committee)\\b|\\b(?:hiring committee|committee)\\b.{0,90}\\b(?:cannot|can't|must not|not allowed|prohibited)\\b)"
+    },
+    "should_abstain": false
+  },
+  {
+    "id": "manager_dating",
+    "document": "Employee-Handbook.pdf",
+    "question": "What restrictions apply to managers dating their direct reports?",
+    "required_facts": {
+      "dating restriction": "\\b(?:must not|cannot|can't|not allowed|prohibited|forbidden)\\b.{0,80}\\bdat(?:e|ing)\\b|\\bdat(?:e|ing)\\b.{0,80}\\b(?:must not|cannot|can't|not allowed|prohibited|forbidden)\\b",
+      "direct reports": "\\bdirect reports?\\b"
+    },
+    "forbidden_patterns": {
+      "friendships incorrectly prohibited": "\\b(?:cannot|can't|must not|not allowed to)\\s+be\\s+friends\\b"
+    },
+    "should_abstain": false
+  },
+  {
+    "id": "serious_harassment",
+    "document": "Employee-Handbook.pdf",
+    "question": "What should an employee do if they experience serious workplace harassment?",
+    "required_facts": {
+      "contact HR": "(?:\\b(?:contact|notify|inform|report to|talk to)\\s+(?:the\\s+)?HR\\b|\\bHR\\b.{0,40}\\b(?:contact|notify|inform|report)\\b)"
+    },
+    "should_abstain": false
+  },
+  {
+    "id": "duplicate_referrals",
+    "document": "Employee-Handbook.pdf",
+    "question": "If two employees refer the same candidate, who receives the referral bonus?",
+    "required_facts": {
+      "first referrer": "\\bfirst\\s+referrer\\b"
+    },
+    "should_abstain": false
+  },
+  {
+    "id": "handbook_unknown_ceo",
+    "document": "Employee-Handbook.pdf",
+    "question": "Who is the company's current CEO?",
+    "should_abstain": true
+  },
+  {
+    "id": "handbook_unknown_revenue",
+    "document": "Employee-Handbook.pdf",
+    "question": "What was the company's revenue in 2025?",
+    "should_abstain": true
+  }
+]

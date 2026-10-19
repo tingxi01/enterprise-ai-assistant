@@ -1,8 +1,91 @@
 
+import re
+from collections import Counter
 from uuid import UUID
 
 from backend.db import get_connection
 from backend.embeddings import generate_embeddings
+
+
+# Common words that don't help distinguish documents.
+STOP_WORDS = {
+    "a", "an", "and", "are", "as", "at", "be", "by",
+    "can", "could", "do", "does", "for", "from",
+    "how", "i", "in", "is", "it", "me", "my",
+    "of", "on", "or", "our", "should", "that",
+    "the", "their", "them", "there", "these",
+    "this", "to", "was", "what", "when", "where",
+    "which", "who", "why", "will", "with",
+    "would", "you", "your", "according",
+    "document", "please", "answer", "question",
+    "list", "every", "all", "include", "including",
+    "step", "steps", "order", "original",
+}
+
+
+def tokenize(text: str) -> list[str]:
+    """
+    Extract meaningful words for lightweight lexical matching.
+
+    Apply simple normalization for common plural and
+    verb endings without requiring another dependency.
+    """
+    words = re.findall(r"[a-zA-Z0-9]+", text.lower())
+
+    tokens = []
+
+    for word in words:
+        if word in STOP_WORDS:
+            continue
+
+        if len(word) > 4 and word.endswith("ies"):
+            word = word[:-3] + "y"
+        elif len(word) > 5 and word.endswith("ing"):
+            word = word[:-3]
+        elif len(word) > 4 and word.endswith("ed"):
+            word = word[:-2]
+        elif len(word) > 3 and word.endswith("s"):
+            word = word[:-1]
+
+        if word and word not in STOP_WORDS:
+            tokens.append(word)
+
+    return tokens
+
+
+def lexical_relevance(question: str, content: str) -> float:
+    """
+    Calculate how well a chunk matches important query words.
+
+    Rewards coverage of query terms, with a small bonus for
+    repeated matches. Repetition is capped so long chunks
+    don't automatically dominate.
+    """
+    query_tokens = set(tokenize(question))
+
+    if not query_tokens:
+        return 0.0
+
+    content_counts = Counter(tokenize(content))
+
+    matched = query_tokens.intersection(content_counts)
+
+    coverage = len(matched) / len(query_tokens)
+
+    frequency_bonus = sum(
+        min(content_counts[token], 3) - 1
+        for token in matched
+    )
+
+    frequency_bonus = min(
+        frequency_bonus / max(len(query_tokens) * 2, 1),
+        1.0,
+    )
+
+    return round(
+        0.85 * coverage + 0.15 * frequency_bonus,
+        4,
+    )
 
 
 def save_document(
@@ -94,6 +177,7 @@ def delete_document(document_id: UUID) -> bool:
                 "DELETE FROM documents WHERE id = %s",
                 (document_id,),
             )
+
             deleted = cursor.rowcount > 0
 
         connection.commit()
@@ -103,15 +187,33 @@ def delete_document(document_id: UUID) -> bool:
 
 def search_documents(
     question: str,
-    top_k: int = 3,
+    top_k: int = 5,
     document_id: UUID | None = None,
 ) -> list[dict]:
+    """
+    Hybrid retrieval:
+    1. Retrieve candidate chunks using pgvector.
+    2. Score their lexical relevance to the question.
+    3. Combine semantic and lexical scores.
+    4. Return the highest-ranked chunks.
+
+    Keeps the same response structure expected by
+    main.py, llm.py, and the React frontend.
+    """
+
     query_embedding = generate_embeddings([question])[0]
 
     if len(query_embedding) != 384:
-        raise ValueError("Expected a 384-dimensional query embedding.")
+        raise ValueError(
+            "Expected a 384-dimensional query embedding."
+        )
 
     vector = "[" + ",".join(map(str, query_embedding)) + "]"
+
+    # Retrieve more candidates than we ultimately return.
+    # This allows lexical reranking to promote relevant
+    # chunks that weren't in the original top five.
+    candidate_limit = max(20, top_k * 4)
 
     with get_connection() as connection:
         with connection.cursor() as cursor:
@@ -125,8 +227,12 @@ def search_documents(
                     c.content,
                     1 - (c.embedding <=> %s::vector) AS score
                 FROM document_chunks c
-                JOIN documents d ON d.id = c.document_id
-                WHERE (%s::uuid IS NULL OR d.id = %s::uuid)
+                JOIN documents d
+                    ON d.id = c.document_id
+                WHERE (
+                    %s::uuid IS NULL
+                    OR d.id = %s::uuid
+                )
                 ORDER BY c.embedding <=> %s::vector
                 LIMIT %s
                 """,
@@ -135,23 +241,63 @@ def search_documents(
                     document_id,
                     document_id,
                     vector,
-                    top_k,
+                    candidate_limit,
                 ),
             )
 
             rows = cursor.fetchall()
 
+    candidates = []
+
+    for row in rows:
+        semantic_score = float(row[5])
+
+        lexical_score = lexical_relevance(
+            question,
+            row[4],
+        )
+
+        # Preserve the semantic signal while giving
+        # meaningful query terms some influence.
+        combined_score = (
+            0.65 * semantic_score
+            + 0.35 * lexical_score
+        )
+
+        candidates.append(
+            {
+                "document_id": str(row[0]),
+                "filename": row[1],
+                "page_number": row[2],
+                "document_chunk_index": row[3],
+                "text": row[4],
+                "score": round(semantic_score, 4),
+                "lexical_score": lexical_score,
+                "combined_score": round(combined_score, 4),
+            }
+        )
+
+    candidates.sort(
+        key=lambda item: (
+            item["combined_score"],
+            item["score"],
+        ),
+        reverse=True,
+    )
+
+    selected = candidates[:top_k]
+
     return [
         {
-            # Number each retrieved source consistently for the LLM
-            # and the existing React interface.
             "chunk_index": rank,
-            "document_chunk_index": row[3],
-            "document_id": str(row[0]),
-            "filename": row[1],
-            "page_number": row[2],
-            "text": row[4],
-            "score": round(float(row[5]), 4),
+            "document_chunk_index": item[
+                "document_chunk_index"
+            ],
+            "document_id": item["document_id"],
+            "filename": item["filename"],
+            "page_number": item["page_number"],
+            "text": item["text"],
+            "score": item["score"],
         }
-        for rank, row in enumerate(rows)
+        for rank, item in enumerate(selected)
     ]

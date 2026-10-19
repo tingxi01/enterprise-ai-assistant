@@ -1,6 +1,8 @@
 
 from contextlib import asynccontextmanager
 from uuid import UUID
+from backend.pdf_preprocessing import extract_ordered_page_text
+from backend.answering import answer_from_numbered_procedure
 
 import fitz
 from fastapi import FastAPI, File, HTTPException, UploadFile
@@ -9,7 +11,7 @@ from pydantic import BaseModel, Field
 from backend.chunking import split_text
 from backend.db import initialize_database
 from backend.embeddings import generate_embeddings
-from backend.llm import generate_answer
+from backend.llm import MODEL_NAME, generate_answer
 from backend.repository import (
     delete_document,
     list_documents,
@@ -37,7 +39,7 @@ app = FastAPI(
 
 class SearchRequest(BaseModel):
     question: str = Field(min_length=1)
-    top_k: int = Field(default=3, ge=1, le=20)
+    top_k: int = Field(default=5, ge=1, le=20)
     document_id: UUID | None = None
 
 
@@ -79,7 +81,7 @@ async def upload_document(file: UploadFile = File(...)):
                     detail="Password-protected PDFs are not supported.",
                 )
 
-            pages = [page.get_text() for page in pdf]
+            pages = [extract_ordered_page_text(page) for page in pdf]
 
     except HTTPException:
         raise
@@ -214,15 +216,27 @@ def search_document(request: SearchRequest):
     }
 
 
+
 @app.post("/documents/ask")
 def ask_document(request: SearchRequest):
     results = retrieve_context(request)
 
     try:
-        answer = generate_answer(
+        # First try direct extraction for clearly matched
+        # numbered procedures. This preserves exact steps
+        # without asking the LLM to rewrite them.
+        answer = answer_from_numbered_procedure(
             question=request.question,
             retrieved_chunks=results,
         )
+
+        # Otherwise retain the existing Qwen2.5 RAG path.
+        if answer is None:
+            answer = generate_answer(
+                question=request.question,
+                retrieved_chunks=results,
+            )
+
     except Exception as exc:
         raise HTTPException(
             status_code=503,
@@ -233,5 +247,5 @@ def ask_document(request: SearchRequest):
         "question": request.question,
         "answer": answer,
         "sources": results,
-        "model": "qwen3:4b",
+        "model": MODEL_NAME,
     }
