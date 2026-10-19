@@ -220,3 +220,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# RAG evaluation reports
+reports/rag_eval_results.json
+
+# Private Etsy files
+ORANGE.pdf
