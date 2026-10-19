@@ -34,83 +34,149 @@ type AnswerResponse = {
   resolved_question?: string
 }
 
-
 const CHAT_STORAGE_KEY = 'enterprise-ai-current-chat'
+const CHATS_STORAGE_KEY = 'enterprise-ai-saved-chats-v1'
 
 type SavedChat = {
+  id: string
+  title: string
   selectedDocumentId: string | null
   messages: Message[]
+  updatedAt: number
 }
 
-function loadSavedChat(): SavedChat {
-  const emptyChat: SavedChat = {
-    selectedDocumentId: null,
+type ChatStore = {
+  activeChatId: string
+  chats: SavedChat[]
+}
+
+function makeChat(documentId: string | null = null): SavedChat {
+  return {
+    id: crypto.randomUUID(),
+    title: 'New chat',
+    selectedDocumentId: documentId,
     messages: [],
+    updatedAt: Date.now(),
   }
+}
 
+function validMessages(value: unknown): value is Message[] {
+  return Array.isArray(value) && value.every((item) =>
+    item !== null &&
+    typeof item === 'object' &&
+    typeof item.id === 'number' &&
+    (item.role === 'user' || item.role === 'assistant') &&
+    typeof item.content === 'string'
+  )
+}
+
+function loadChats(): ChatStore {
   try {
-    const stored = localStorage.getItem(CHAT_STORAGE_KEY)
+    const stored = localStorage.getItem(CHATS_STORAGE_KEY)
 
-    if (!stored) return emptyChat
+    if (stored) {
+      const parsed: unknown = JSON.parse(stored)
 
-    const parsed: unknown = JSON.parse(stored)
+      if (parsed && typeof parsed === 'object') {
+        const data = parsed as Partial<ChatStore>
 
-    if (!parsed || typeof parsed !== 'object') {
-      return emptyChat
+        if (Array.isArray(data.chats)) {
+          const chats = data.chats.filter(
+            (chat): chat is SavedChat =>
+              chat !== null &&
+              typeof chat === 'object' &&
+              typeof chat.id === 'string' &&
+              typeof chat.title === 'string' &&
+              (chat.selectedDocumentId === null ||
+                typeof chat.selectedDocumentId === 'string') &&
+              validMessages(chat.messages) &&
+              typeof chat.updatedAt === 'number'
+          )
+
+          if (chats.length > 0) {
+            return {
+              chats,
+              activeChatId: chats.some(
+                (chat) => chat.id === data.activeChatId
+              )
+                ? data.activeChatId as string
+                : chats[0].id,
+            }
+          }
+        }
+      }
     }
 
-    const chat = parsed as Partial<SavedChat>
+    // Import previous single-chat history.
+    const previous = localStorage.getItem(CHAT_STORAGE_KEY)
 
-    if (
-      chat.selectedDocumentId !== null &&
-      typeof chat.selectedDocumentId !== 'string'
-    ) {
-      return emptyChat
-    }
+    if (previous) {
+      const old = JSON.parse(previous) as {
+        selectedDocumentId?: unknown
+        messages?: unknown
+      }
 
-    if (!Array.isArray(chat.messages)) {
-      return emptyChat
-    }
+      if (
+        validMessages(old.messages) &&
+        (old.selectedDocumentId === null ||
+          typeof old.selectedDocumentId === 'string')
+      ) {
+        const chat = makeChat(old.selectedDocumentId)
 
-    const validMessages = chat.messages.every(
-      (message) =>
-        message &&
-        typeof message === 'object' &&
-        typeof message.id === 'number' &&
-        (message.role === 'user' ||
-          message.role === 'assistant') &&
-        typeof message.content === 'string'
-    )
+        chat.messages = old.messages
+        chat.title = old.messages.find(
+          (msg) => msg.role === 'user'
+        )?.content.slice(0, 48) || 'New chat'
 
-    if (!validMessages) return emptyChat
-
-    return {
-      selectedDocumentId: chat.selectedDocumentId,
-      messages: chat.messages,
+        return {
+          activeChatId: chat.id,
+          chats: [chat],
+        }
+      }
     }
   } catch {
-    return emptyChat
+    // Use a new chat if storage cannot be read.
+  }
+
+  const chat = makeChat()
+
+  return {
+    activeChatId: chat.id,
+    chats: [chat],
   }
 }
-
 
 let nextMessageId = 1
 
 function App() {
   const [documents, setDocuments] = useState<DocumentItem[]>([])
-  
-  const [savedChat] = useState(loadSavedChat)
+
+  const [initialStore] = useState(loadChats)
+
+  const [chats, setChats] = useState<SavedChat[]>(
+    initialStore.chats
+  )
+
+  const [activeChatId, setActiveChatId] = useState(
+    initialStore.activeChatId
+  )
+
+  const initialChat = initialStore.chats.find(
+    (chat) => chat.id === initialStore.activeChatId
+  ) ?? initialStore.chats[0]
 
   const [selectedDocumentId, setSelectedDocumentId] =
-    useState<string | null>(savedChat.selectedDocumentId)
+    useState<string | null>(initialChat.selectedDocumentId)
 
-  const [messages, setMessages] =
-    useState<Message[]>(savedChat.messages)
-    
+  const [messages, setMessages] = useState<Message[]>(
+    initialChat.messages
+  )
 
   nextMessageId = Math.max(
     nextMessageId,
-    ...savedChat.messages.map((message) => message.id + 1)
+    ...initialStore.chats.flatMap((chat) =>
+      chat.messages.map((message) => message.id + 1)
+    )
   )
 
   const [question, setQuestion] = useState('')
@@ -129,24 +195,133 @@ function App() {
 
   const busy = uploading || thinking || deletingId !== null
 
+  // Update the saved version of the current chat.
+  useEffect(() => {
+    setChats((previous) =>
+      previous.map((chat) => {
+        if (chat.id !== activeChatId) return chat
 
+        const unchanged =
+          chat.selectedDocumentId === selectedDocumentId &&
+          chat.messages === messages
+
+        if (unchanged) return chat
+
+        const firstQuestion = messages.find(
+          (item) => item.role === 'user'
+        )
+
+        return {
+          ...chat,
+          selectedDocumentId,
+          messages,
+          title:
+            chat.title === 'New chat' && firstQuestion
+              ? firstQuestion.content.slice(0, 48)
+              : chat.title,
+          updatedAt: Date.now(),
+        }
+      })
+    )
+  }, [activeChatId, selectedDocumentId, messages])
+
+  // Save all conversations to browser storage.
   useEffect(() => {
     try {
       localStorage.setItem(
-        CHAT_STORAGE_KEY,
+        CHATS_STORAGE_KEY,
         JSON.stringify({
-          selectedDocumentId,
-          messages,
+          activeChatId,
+          chats,
         })
       )
     } catch {
-      // Storage may be unavailable or full.
-      // The chat can still function in memory.
+      // Chat continues even if storage is unavailable.
     }
-  }, [selectedDocumentId, messages])
+  }, [activeChatId, chats])
 
+  // Open an existing conversation.
+  function openChat(chat: SavedChat) {
+    if (busy || chat.id === activeChatId) return
 
-  async function readError(response: Response): Promise<string> {
+    setActiveChatId(chat.id)
+    setSelectedDocumentId(chat.selectedDocumentId)
+    setMessages(chat.messages)
+    setQuestion('')
+    setError('')
+  }
+
+  // Create a new, separate conversation.
+  function createChat(documentId: string | null = null) {
+    if (busy) return
+
+    const chat = makeChat(documentId)
+
+    setChats((previous) => [chat, ...previous])
+    setActiveChatId(chat.id)
+    setSelectedDocumentId(documentId)
+    setMessages(chat.messages)
+    setQuestion('')
+    setError('')
+  }
+
+  // Rename a conversation.
+  function renameChat(chat: SavedChat) {
+    if (busy) return
+
+    const proposed = window.prompt(
+      'Rename chat:',
+      chat.title
+    )
+
+    if (proposed === null || !proposed.trim()) return
+
+    setChats((previous) =>
+      previous.map((item) =>
+        item.id === chat.id
+          ? {
+              ...item,
+              title: proposed.trim().slice(0, 80),
+            }
+          : item
+      )
+    )
+  }
+
+  // Delete one conversation without deleting documents.
+  function removeChat(chat: SavedChat) {
+    if (busy) return
+
+    const confirmed = window.confirm(
+      `Delete chat "${chat.title}"?`
+    )
+
+    if (!confirmed) return
+
+    const remaining = chats.filter(
+      (item) => item.id !== chat.id
+    )
+
+    // Deleting an inactive chat does not affect the open chat.
+    if (chat.id !== activeChatId) {
+      setChats(remaining)
+      return
+    }
+
+    // Switch to another chat or create an empty one.
+    const fallback = remaining[0] ?? makeChat()
+
+    setChats(remaining.length ? remaining : [fallback])
+    setActiveChatId(fallback.id)
+    setSelectedDocumentId(fallback.selectedDocumentId)
+    setMessages(fallback.messages)
+    setQuestion('')
+    setError('')
+  }
+
+  async function readError(
+    response: Response
+  ): Promise<string> {
     try {
       const data = await response.json()
 
@@ -173,7 +348,7 @@ function App() {
     return data.documents
   }
 
-  // Load existing PostgreSQL documents when the page opens.
+  // Load documents from PostgreSQL.
   useEffect(() => {
     let cancelled = false
 
@@ -206,14 +381,11 @@ function App() {
     }
   }, [])
 
-  // Switching documents clears conversation history.
+  // Selecting a document starts a new chat for that document.
   function selectDocument(id: string | null) {
     if (busy) return
 
-    setSelectedDocumentId(id)
-    setMessages([])
-    setQuestion('')
-    setError('')
+    createChat(id)
   }
 
   async function uploadDocument(file: File) {
@@ -247,17 +419,26 @@ function App() {
 
       const uploaded: DocumentItem = await response.json()
 
-      // Immediately add the uploaded document to the sidebar.
       setDocuments((previous) => [
         uploaded,
         ...previous.filter((doc) => doc.id !== uploaded.id),
       ])
 
+      // Start a new chat for the uploaded document.
+      // Existing chats are preserved.
+      const uploadedChat = makeChat(uploaded.id)
+
+      setChats((previous) => [
+        uploadedChat,
+        ...previous,
+      ])
+
+      setActiveChatId(uploadedChat.id)
       setSelectedDocumentId(uploaded.id)
       setMessages([])
       setQuestion('')
 
-      // Synchronize with the database.
+      // Refresh the document library.
       try {
         const updated = await fetchDocuments()
         setDocuments(updated)
@@ -288,7 +469,6 @@ function App() {
     }
   }
 
-  // Delete from PostgreSQL and update the React sidebar.
   async function deleteDocument(doc: DocumentItem) {
     if (busy) return
 
@@ -310,18 +490,18 @@ function App() {
       )
 
       if (!response.ok) {
-        // If the record is already gone, synchronize the UI.
         if (response.status === 404) {
           const updated = await fetchDocuments()
           setDocuments(updated)
 
-          setMessages([])
-          setQuestion('')
-
           if (
-            !updated.some((item) => item.id === selectedDocumentId)
+            !updated.some(
+              (item) => item.id === selectedDocumentId
+            )
           ) {
             setSelectedDocumentId(null)
+            setMessages([])
+            setQuestion('')
           }
 
           return
@@ -330,27 +510,26 @@ function App() {
         throw new Error(await readError(response))
       }
 
-      // Remove the deleted document immediately.
       setDocuments((previous) =>
         previous.filter((item) => item.id !== doc.id)
       )
 
-      // Clear potentially outdated answers and references.
-      setMessages([])
-      setQuestion('')
-
+      // Clear active messages if their document was deleted.
       if (selectedDocumentId === doc.id) {
         setSelectedDocumentId(null)
+        setMessages([])
+        setQuestion('')
       }
 
-      // Fetch the authoritative document list from PostgreSQL.
       try {
         const updated = await fetchDocuments()
         setDocuments(updated)
 
         if (
           selectedDocumentId !== null &&
-          !updated.some((item) => item.id === selectedDocumentId)
+          !updated.some(
+            (item) => item.id === selectedDocumentId
+          )
         ) {
           setSelectedDocumentId(null)
         }
@@ -366,7 +545,6 @@ function App() {
           : 'Failed to delete document.'
       )
 
-      // Attempt to recover the correct database state.
       try {
         const updated = await fetchDocuments()
         setDocuments(updated)
@@ -378,17 +556,16 @@ function App() {
     }
   }
 
-  async function askQuestion(event: FormEvent<HTMLFormElement>) {
+  async function askQuestion(
+    event: FormEvent<HTMLFormElement>
+  ) {
     event.preventDefault()
 
     const text = question.trim()
 
     if (!text || documents.length === 0 || busy) return
 
-    // CONVERSATION MEMORY:
-    // Capture the last six completed messages BEFORE adding
-    // the current question. This prevents duplicate messages
-    // and allows the backend to resolve follow-up questions.
+    // Send only the current conversation's previous messages.
     const history = messages
       .filter((message) => message.content.trim())
       .slice(-6)
@@ -420,7 +597,7 @@ function App() {
           question: text,
           top_k: 5,
           document_id: selectedDocumentId,
-          history: history,
+          history,
         }),
       })
 
@@ -428,7 +605,8 @@ function App() {
         throw new Error(await readError(response))
       }
 
-      const data: AnswerResponse = await response.json()
+      const data: AnswerResponse =
+        await response.json()
 
       setMessages((previous) => [
         ...previous,
@@ -457,7 +635,10 @@ function App() {
           <div className="brand-icon">✦</div>
 
           <div>
-            <div className="brand-name">Enterprise AI</div>
+            <div className="brand-name">
+              Enterprise AI
+            </div>
+
             <div className="brand-subtitle">
               Knowledge Workspace
             </div>
@@ -467,14 +648,101 @@ function App() {
         <button
           className="new-chat-button"
           disabled={busy}
-          onClick={() => {
-            setMessages([])
-            setQuestion('')
-            setError('')
-          }}
+          onClick={() => createChat()}
         >
           ＋ New chat
         </button>
+
+        {/* MULTIPLE SAVED CONVERSATIONS */}
+        <div className="sidebar-section">
+          <div className="section-heading">
+            RECENT CHATS
+          </div>
+
+          <div
+            style={{
+              maxHeight: 220,
+              overflowY: 'auto',
+            }}
+          >
+            {[...chats]
+              .sort(
+                (a, b) =>
+                  b.updatedAt - a.updatedAt
+              )
+              .map((chat) => (
+                <div
+                  key={chat.id}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 4,
+                    borderRadius: 8,
+                    background:
+                      chat.id === activeChatId
+                        ? 'rgba(128,128,128,0.18)'
+                        : 'transparent',
+                  }}
+                >
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => openChat(chat)}
+                    title={chat.title}
+                    style={{
+                      flex: 1,
+                      minWidth: 0,
+                      textAlign: 'left',
+                      padding: '9px 8px',
+                      background: 'transparent',
+                      border: 0,
+                      color: 'inherit',
+                      cursor: 'pointer',
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                    }}
+                  >
+                    {chat.title}
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={busy}
+                    title="Rename chat"
+                    aria-label={`Rename ${chat.title}`}
+                    onClick={() => renameChat(chat)}
+                    style={{
+                      border: 0,
+                      background: 'transparent',
+                      color: 'inherit',
+                      cursor: 'pointer',
+                      padding: 5,
+                    }}
+                  >
+                    ✎
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={busy}
+                    title="Delete chat"
+                    aria-label={`Delete ${chat.title}`}
+                    onClick={() => removeChat(chat)}
+                    style={{
+                      border: 0,
+                      background: 'transparent',
+                      color: 'inherit',
+                      cursor: 'pointer',
+                      padding: 5,
+                    }}
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+          </div>
+        </div>
 
         <div className="sidebar-section">
           <div className="section-heading">
@@ -493,12 +761,15 @@ function App() {
 
           <button
             className={`document-filter ${
-              selectedDocumentId === null ? 'selected' : ''
+              selectedDocumentId === null
+                ? 'selected'
+                : ''
             }`}
             onClick={() => selectDocument(null)}
             disabled={busy}
           >
             <span>▦</span>
+
             <span>All documents</span>
 
             <span className="document-count">
@@ -529,7 +800,9 @@ function App() {
                     className="library-document-select"
                     disabled={busy}
                     title={doc.filename}
-                    onClick={() => selectDocument(doc.id)}
+                    onClick={() =>
+                      selectDocument(doc.id)
+                    }
                   >
                     <span className="document-symbol">
                       ▧
@@ -552,9 +825,13 @@ function App() {
                     title={`Delete ${doc.filename}`}
                     aria-label={`Delete ${doc.filename}`}
                     disabled={busy}
-                    onClick={() => void deleteDocument(doc)}
+                    onClick={() =>
+                      void deleteDocument(doc)
+                    }
                   >
-                    {deletingId === doc.id ? '…' : '×'}
+                    {deletingId === doc.id
+                      ? '…'
+                      : '×'}
                   </button>
                 </div>
               ))}
@@ -564,7 +841,9 @@ function App() {
           <button
             className="upload-secondary"
             disabled={busy}
-            onClick={() => fileInputRef.current?.click()}
+            onClick={() =>
+              fileInputRef.current?.click()
+            }
           >
             {uploading
               ? 'Uploading...'
@@ -601,7 +880,9 @@ function App() {
         <div className="chat-content">
           {messages.length === 0 ? (
             <div className="welcome">
-              <div className="welcome-icon">✦</div>
+              <div className="welcome-icon">
+                ✦
+              </div>
 
               <h1>
                 Knowledge, at your fingertips.
@@ -617,7 +898,9 @@ function App() {
                 <button
                   className="primary-button"
                   disabled={busy}
-                  onClick={() => fileInputRef.current?.click()}
+                  onClick={() =>
+                    fileInputRef.current?.click()
+                  }
                 >
                   {uploading
                     ? 'Processing...'
@@ -642,8 +925,14 @@ function App() {
 
               <div className="feature-grid">
                 <div className="feature-card">
-                  <div className="feature-icon">⌕</div>
-                  <strong>Semantic search</strong>
+                  <div className="feature-icon">
+                    ⌕
+                  </div>
+
+                  <strong>
+                    Semantic search
+                  </strong>
+
                   <span>
                     Find relevant information
                     across documents.
@@ -651,18 +940,32 @@ function App() {
                 </div>
 
                 <div className="feature-card">
-                  <div className="feature-icon">✧</div>
-                  <strong>AI-powered answers</strong>
+                  <div className="feature-icon">
+                    ✧
+                  </div>
+
+                  <strong>
+                    AI-powered answers
+                  </strong>
+
                   <span>
-                    Get responses using retrieved context.
+                    Get responses using retrieved
+                    context.
                   </span>
                 </div>
 
                 <div className="feature-card">
-                  <div className="feature-icon">▤</div>
-                  <strong>Source references</strong>
+                  <div className="feature-icon">
+                    ▤
+                  </div>
+
+                  <strong>
+                    Source references
+                  </strong>
+
                   <span>
-                    See document names and page numbers.
+                    See document names and
+                    page numbers.
                   </span>
                 </div>
               </div>
@@ -810,7 +1113,8 @@ function App() {
         accept=".pdf,application/pdf"
         hidden
         onChange={(event) => {
-          const file = event.target.files?.[0]
+          const file =
+            event.target.files?.[0]
 
           if (file) {
             void uploadDocument(file)
